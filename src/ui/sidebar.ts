@@ -18,6 +18,7 @@ export interface SidebarCallbacks {
   onLockSet: (which: "start" | "end") => void;
   onLockClear: () => void;
   onLockRegen: () => void;
+  onClearSite: () => void;
 }
 
 const P = (v: number) => `${Math.round(v * 100)}`;
@@ -122,6 +123,11 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
         sliderRow("max fill (m)", { min: 2, max: 40, step: 1, value: p.maxFill, badge: "morph", format: (v) => v.toFixed(0), onInput: morph("maxFill"), onCommit: morphCommit("maxFill") }),
         sliderRow("contour following", { min: 0, max: 1, step: 0.01, value: p.contourFollowing, badge: "morph", format: P, onInput: morph("contourFollowing"), onCommit: morphCommit("contourFollowing") }),
         el("div", { className: "hint", textContent: "adherence = route follows the land; earthwork = how far the road elevation may deviate from ground (civil engineering freedom)." }),
+        (() => {
+          const b = el("button", { textContent: "CLEAR SITE (blank canvas)" });
+          b.addEventListener("click", cb.onClearSite);
+          return b;
+        })(),
       ], true),
     );
   }

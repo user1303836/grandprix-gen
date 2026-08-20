@@ -706,6 +706,10 @@ export class App {
       onLockSet: (which) => this.onLockSet(which),
       onLockClear: () => this.store.set({ lockRange: null }, "lockRange"),
       onLockRegen: () => this.lockRegen(),
+      onClearSite: () => {
+        this.store.set({ terrain: null, site: null }, "terrain", "site");
+        void this.generate();
+      },
     });
     this.sidebarEl.replaceWith(elSidebar);
     this.sidebarEl = elSidebar;
