@@ -135,6 +135,9 @@ export class App {
       }
       if (changed.includes("candidates") || changed.includes("candidatesSelected")) {
         this.renderStrip();
+        // the strip overlays the bottom of the viewport -- refit around it
+        this.view2d.needsFit = true;
+        this.dirty2d = true;
       }
       if (changed.includes("view")) {
         this.applyViewVisibility();

@@ -20,7 +20,8 @@ export class View2D {
   private fittedFor: Track | null = null;
   private terrainCanvas: HTMLCanvasElement | null = null;
   private terrainFor: TerrainGrid | null = null;
-  private needsFit = true;
+  /** Set by the app when overlays change; forces a refit on next render. */
+  needsFit = true;
   onStationHover: ((s: number | null) => void) | null = null;
 
   constructor(container: HTMLElement) {
