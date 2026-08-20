@@ -23,6 +23,7 @@ import {
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { buildGridMesh, buildTrackMesh } from "../export/mesh";
 import { sampleAt } from "../core/types";
+import { carveSampler } from "../core/terrain";
 import type { AppState } from "./state";
 import type { Track } from "../core/types";
 
@@ -107,8 +108,27 @@ export class View3D {
   setState(state: AppState): void {
     const trackChanged = this.state?.track !== state.track || this.state?.terrain !== state.terrain;
     this.state = state;
-    if (trackChanged) this.rebuildScene(state);
+    if (trackChanged) {
+      if (this.visible) {
+        this.rebuildScene(state);
+        this.needsRebuild = false;
+      } else {
+        this.needsRebuild = true;
+      }
+    }
   }
+
+  /** Call when the 3D/drive view becomes visible. */
+  setVisible(v: boolean): void {
+    this.visible = v;
+    if (v && this.needsRebuild && this.state) {
+      this.rebuildScene(this.state);
+      this.needsRebuild = false;
+    }
+  }
+
+  private visible = false;
+  private needsRebuild = false;
 
   private rebuildScene(state: AppState): void {
     if (this.trackGroup) {
@@ -136,23 +156,27 @@ export class View3D {
       // fit camera on first build
       const cx = track.samples[0].x;
       const cy = track.samples[0].y;
-      this.controls.target.set(cx, track.samples[0].z, -cy);
+      const cz = track.samples[0].z;
+      this.controls.target.set(cx, cz, -cy);
       const span = estimateSpan(track);
-      this.camera.position.set(cx + span * 0.7, span * 0.55, -cy + span * 0.7);
+      const terrainMaxZ = state.terrain ? state.terrain.maxElevation : cz;
+      const camY = Math.max(cz + span * 0.5, terrainMaxZ + span * 0.22);
+      this.camera.position.set(cx + span * 0.65, camY, -cy + span * 0.65);
     }
     // terrain / ground
-    if (state.terrain) {
+    if (state.terrain && track) {
       const g = state.terrain;
       const maxSide = 220;
       const strideT = Math.max(1, Math.floor(Math.max(g.width, g.height) / maxSide));
+      const sampler = carveSampler(g, track.samples, 26, 110);
       const gm = buildGridMesh(
-        (x, y) => g.elevationAt(x, y),
+        sampler,
         g.originX,
         g.originY,
-        g.originX + g.width * g.resolution,
-        g.originY + g.height * g.resolution,
-        Math.floor(g.width / strideT),
-        Math.floor(g.height / strideT),
+        g.originX + (g.width - 1) * g.resolution,
+        g.originY + (g.height - 1) * g.resolution,
+        Math.max(2, Math.floor((g.width - 1) / strideT)),
+        Math.max(2, Math.floor((g.height - 1) / strideT)),
       );
       const terrain = this.gridMesh(gm.positions, gm.indices, 0x2c4423);
       this.trackGroup.add(terrain);
@@ -242,6 +266,7 @@ export class View3D {
     if (this.driveActive && state.track) {
       this.controls.enabled = false;
       const track = state.track;
+      if (!Number.isFinite(this.driveS)) this.driveS = 0;
       const idx = Math.floor(this.driveS / track.ds) % track.samples.length;
       const v = Number.isFinite(track.samples[idx].speed) ? track.samples[idx].speed : 30;
       this.driveS = (this.driveS + v * this.driveSpeedMult * dt) % track.length;

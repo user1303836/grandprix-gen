@@ -91,7 +91,8 @@ export class Store {
   }
 
   set(patch: Partial<AppState>, ...changed: string[]): void {
-    Object.assign(this.state, patch);
+    // immutable update: reference identity lets subscribers detect changes
+    this.state = { ...this.state, ...patch };
     const keys = changed.length > 0 ? changed : Object.keys(patch);
     for (const fn of this.listeners) fn(this.state, keys);
   }

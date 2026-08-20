@@ -45,6 +45,7 @@ export class App {
   private morphInFlight = false;
 
   constructor(root: HTMLElement) {
+    (window as unknown as { __app: App }).__app = this; // dev/debug handle
     const shell = el("div", { className: "app-shell" });
 
     // toolbar
@@ -195,6 +196,7 @@ export class App {
     const mapControls = this.viewportEl.querySelector(".map-controls") as HTMLElement | null;
     if (mapControls) mapControls.style.display = showMap ? "flex" : "none";
     this.dirty2d = true;
+    this.view3d.setVisible(show3d);
     if (show3d) {
       this.view3d.resize();
       this.view3d.setState(this.store.state);

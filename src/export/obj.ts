@@ -4,7 +4,7 @@
  */
 
 import { buildGridMesh, buildTrackMesh } from "./mesh";
-import type { TerrainGrid } from "../core/terrain";
+import { carveSampler, type TerrainGrid } from "../core/terrain";
 import type { Track } from "../core/types";
 
 export interface ObjOptions {
@@ -56,12 +56,13 @@ export function trackToObj(track: Track, opts: ObjOptions = {}): string {
     const extent = opts.terrainExtent ?? Math.max(g.width, g.height) * g.resolution;
     const nx = Math.min(256, g.width);
     const ny = Math.min(256, g.height);
+    const sampler = carveSampler(g, track.samples, 26, 110);
     const mesh2 = buildGridMesh(
-      (x, y) => g.elevationAt(x, y),
+      sampler,
       g.originX,
       g.originY,
-      g.originX + extent,
-      g.originY + extent,
+      g.originX + Math.min(extent, (g.width - 1) * g.resolution),
+      g.originY + Math.min(extent, (g.height - 1) * g.resolution),
       nx,
       ny,
     );

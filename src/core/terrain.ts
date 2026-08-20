@@ -123,6 +123,67 @@ export class TerrainGrid {
 }
 
 // ---------------------------------------------------------------------------
+// Corridor carving
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a terrain sampler so the ground is flattened toward the road
+ * elevation near the track corridor (the way driving sims seat the road
+ * into the landscape). Returns sampler + corridor half-width used.
+ */
+export function carveSampler(
+  grid: TerrainGrid,
+  trackSamples: { x: number; y: number; z: number }[],
+  innerM = 26,
+  outerM = 110,
+): (x: number, y: number) => number {
+  // spatial hash of track samples (coarse buckets)
+  const bucketSize = 128;
+  const buckets = new Map<string, number[]>();
+  const key = (x: number, y: number) => `${Math.floor(x / bucketSize)},${Math.floor(y / bucketSize)}`;
+  trackSamples.forEach((p, i) => {
+    const k = key(p.x, p.y);
+    let arr = buckets.get(k);
+    if (!arr) buckets.set(k, (arr = []));
+    arr.push(i);
+  });
+  const nearest = (x: number, y: number): { d: number; z: number } | null => {
+    const bx = Math.floor(x / bucketSize);
+    const by = Math.floor(y / bucketSize);
+    let best = Infinity;
+    let bestZ = 0;
+    for (let r = 1; r <= 2; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const arr = buckets.get(`${bx + dx},${by + dy}`);
+          if (!arr) continue;
+          for (const i of arr) {
+            const p = trackSamples[i];
+            const d = Math.hypot(p.x - x, p.y - y);
+            if (d < best) {
+              best = d;
+              bestZ = p.z;
+            }
+          }
+        }
+      }
+      if (best < bucketSize * r) return { d: best, z: bestZ };
+    }
+    return best < Infinity ? { d: best, z: bestZ } : null;
+  };
+  return (x: number, y: number) => {
+    const gz = grid.elevationAt(x, y);
+    if (Number.isNaN(gz)) return gz;
+    const hit = nearest(x, y);
+    if (!hit || hit.d >= outerM) return gz;
+    if (hit.d <= innerM) return hit.z;
+    const t = (hit.d - innerM) / (outerM - innerM);
+    const s = t * t * (3 - 2 * t);
+    return hit.z * (1 - s) + gz * s;
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Mapterhorn provider (Terrarium-encoded webp tiles, no API key)
 // ---------------------------------------------------------------------------
 

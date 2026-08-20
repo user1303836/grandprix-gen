@@ -13,7 +13,7 @@ import {
 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { buildGridMesh, buildTrackMesh } from "./mesh";
-import type { TerrainGrid } from "../core/terrain";
+import { carveSampler, type TerrainGrid } from "../core/terrain";
 import type { Track } from "../core/types";
 
 const PART_COLORS: Record<string, number> = {
@@ -66,12 +66,13 @@ export async function trackToGlb(track: Track, terrain?: TerrainGrid | null): Pr
     const g = terrain;
     const maxSide = 256;
     const strideT = Math.max(1, Math.floor(Math.max(g.width, g.height) / maxSide));
+    const sampler = carveSampler(g, track.samples, 26, 110);
     const gm = buildGridMesh(
-      (x, y) => g.elevationAt(x, y),
+      sampler,
       g.originX,
       g.originY,
-      g.originX + g.width * g.resolution,
-      g.originY + g.height * g.resolution,
+      g.originX + (g.width - 1) * g.resolution,
+      g.originY + (g.height - 1) * g.resolution,
       Math.floor(g.width / strideT),
       Math.floor(g.height / strideT),
     );
