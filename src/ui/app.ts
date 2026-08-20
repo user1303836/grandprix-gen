@@ -9,6 +9,7 @@ import { buildToolbar } from "./toolbar";
 import { buildSidebar } from "./sidebar";
 import { buildStatusBar } from "./metricsBar";
 import { buildCandidateStrip } from "./candidates";
+import { ProfileGraph } from "./profileGraph";
 import { View2D } from "./view2d";
 import { View3D } from "./view3d";
 import { MapView, type SiteSelection } from "./mapView";
@@ -40,9 +41,11 @@ export class App {
   private viewportEl: HTMLElement;
   private stripEl: HTMLElement | null = null;
   private overlayEl: HTMLElement;
+  private graph: ProfileGraph;
   private dirty2d = true;
   private morphQueued: TrackParams | null = null;
   private morphInFlight = false;
+  private lastHoverS: number | null = null;
 
   constructor(root: HTMLElement) {
     (window as unknown as { __app: App }).__app = this; // dev/debug handle
@@ -94,10 +97,17 @@ export class App {
     this.statusEl = el("div");
     shell.append(this.statusEl);
 
+    // profile graph (instrumentation strip) above the status bar
+    this.graph = new ProfileGraph();
+    shell.insertBefore(this.graph.root, this.statusEl);
+
     root.append(shell);
 
     // hover station -> status detail (2D tooltip handles display)
-    this.view2d.onStationHover = () => {
+    this.view2d.onStationHover = (s) => {
+      this.lastHoverS = s;
+      this.graph.hoverS = s;
+      this.graph.redraw();
       this.dirty2d = true;
     };
 
@@ -108,6 +118,7 @@ export class App {
         changed.includes("metrics") ||
         changed.includes("terrain") ||
         changed.includes("heatLayer") ||
+        changed.includes("lockRange") ||
         changed.includes("showSectors") ||
         changed.includes("showCorners") ||
         changed.includes("showControlPoints") ||
@@ -118,6 +129,9 @@ export class App {
       }
       if (changed.includes("track") || changed.includes("metrics") || changed.includes("validation") || changed.includes("busy")) {
         this.renderStatus();
+      }
+      if (changed.includes("track") || changed.includes("terrain")) {
+        this.graph.setState(state);
       }
       if (changed.includes("candidates") || changed.includes("candidatesSelected")) {
         this.renderStrip();
@@ -555,6 +569,46 @@ export class App {
     })();
   }
 
+  // ------------------------------------------------------------ section lock
+  private onLockSet(which: "start" | "end"): void {
+    const s = this.store.state;
+    if (this.lastHoverS === null || !s.track) return;
+    const cur = s.lockRange;
+    const next = cur
+      ? { ...cur }
+      : { sStart: this.lastHoverS, sEnd: this.lastHoverS };
+    if (which === "start") next.sStart = this.lastHoverS;
+    else next.sEnd = this.lastHoverS;
+    this.store.set({ lockRange: next }, "lockRange");
+    this.dirty2d = true;
+    this.renderSidebar();
+  }
+
+  private async lockRegen(): Promise<void> {
+    const s = this.store.state;
+    if (!s.track || !s.lockRange) return;
+    this.setBusy("REGENERATING OUTSIDE LOCKED SECTION", 0.4);
+    try {
+      const out = await this.engine.run<AnalysisOut | null>("lockregen", {
+        track: s.track,
+        lockStart: s.lockRange.sStart,
+        lockEnd: s.lockRange.sEnd,
+        params: s.params,
+        seed: (Math.random() * 0xffffffff) >>> 0,
+        vehicleId: s.vehicleId,
+        terrain: this.terrainData(),
+      });
+      if (out) {
+        this.adoptAnalysis(out, "lock regen");
+      } else {
+        this.setBusy("LOCK REGEN FAILED — try a different range", null);
+        setTimeout(() => this.setBusy(null, null), 1600);
+      }
+    } finally {
+      this.setBusy(null, null);
+    }
+  }
+
   // ------------------------------------------------------------ save/load/export
   private save(): void {
     const t = this.store.state.track;
@@ -649,6 +703,9 @@ export class App {
       onUndo: () => this.undo(),
       onRedo: () => this.redo(),
       onHistoryJump: (i) => this.onHistoryJump(i),
+      onLockSet: (which) => this.onLockSet(which),
+      onLockClear: () => this.store.set({ lockRange: null }, "lockRange"),
+      onLockRegen: () => this.lockRegen(),
     });
     this.sidebarEl.replaceWith(elSidebar);
     this.sidebarEl = elSidebar;

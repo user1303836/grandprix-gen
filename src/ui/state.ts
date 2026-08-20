@@ -48,6 +48,8 @@ export interface AppState {
   showControlPoints: boolean;
   showTerrainHeat: boolean;
   selectedS: number | null;
+  /** Locked section (stations kept when regenerating the rest). */
+  lockRange: { sStart: number; sEnd: number } | null;
   busy: string | null;
   progress: number | null;
 }
@@ -80,6 +82,7 @@ export class Store {
       showControlPoints: false,
       showTerrainHeat: true,
       selectedS: null,
+      lockRange: null,
       busy: null,
       progress: null,
     };

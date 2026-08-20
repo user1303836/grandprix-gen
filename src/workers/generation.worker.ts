@@ -2,11 +2,11 @@
  * Generation worker: runs engine jobs off the main thread with progress.
  */
 
-import { runBreed, runGenerate, runMorph, runScout, runSearch, type BreedJob, type GenerateJob, type MorphJob, type ScoutJob, type SearchJob } from "../engine/jobs";
+import { runBreed, runGenerate, runLockRegen, runMorph, runScout, runSearch, type BreedJob, type GenerateJob, type LockRegenJob, type MorphJob, type ScoutJob, type SearchJob } from "../engine/jobs";
 
 interface JobMessage {
   id: number;
-  cmd: "generate" | "search" | "morph" | "breed" | "scout";
+  cmd: "generate" | "search" | "morph" | "breed" | "scout" | "lockregen";
   payload: unknown;
 }
 
@@ -37,6 +37,8 @@ ctx.onmessage = (ev: MessageEvent<JobMessage>) => {
       result = runBreed(payload as BreedJob);
     } else if (cmd === "scout") {
       result = runScout(payload as ScoutJob);
+    } else if (cmd === "lockregen") {
+      result = runLockRegen(payload as LockRegenJob);
     }
     post({ id, type: "result", payload: result });
   } catch (e) {

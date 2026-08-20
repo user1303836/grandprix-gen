@@ -12,6 +12,7 @@ import { computeSpeedProfile, VEHICLE_PRESETS, type SpeedProfile, type VehicleSp
 import { computeMetrics, type CircuitMetrics } from "../core/metrics";
 import { validateTrack, type ValidationReport } from "../core/validate";
 import { morphTrack, regenerateStructure } from "../core/morph";
+import { regenerateOutsideLock } from "../core/edit";
 import { TerrainGrid } from "../core/terrain";
 import type { SiteRef, Track, TrackParams } from "../core/types";
 
@@ -202,6 +203,40 @@ export interface BreedJob {
 
 export interface BreedOut {
   offspring: Candidate[];
+}
+
+export interface LockRegenJob {
+  track: Track;
+  lockStart: number;
+  lockEnd: number;
+  params: TrackParams;
+  seed: number;
+  vehicleId: string;
+  terrain?: TerrainGridData | null;
+}
+
+/** Lock a section, regenerate everything outside it. */
+export function runLockRegen(job: LockRegenJob): AnalysisOut | null {
+  const vehicle = VEHICLE_PRESETS[job.vehicleId] ?? VEHICLE_PRESETS.gt3;
+  const terrainOpts = job.terrain
+    ? (() => {
+        const grid = dataToGrid(job.terrain!);
+        return {
+          terrain: grid.meta(),
+          terrainSampler: (x: number, y: number) => grid.elevationAt(x, y),
+          maxFootprintRadius: (Math.min(grid.width, grid.height) * grid.resolution) / 2 * 0.72,
+        };
+      })()
+    : {};
+  const r = regenerateOutsideLock(
+    job.track,
+    { sStart: job.lockStart, sEnd: job.lockEnd },
+    job.params,
+    job.seed,
+    terrainOpts,
+  );
+  if (!r.track) return null;
+  return analyze(r.track, vehicle);
 }
 
 export function runBreed(job: BreedJob): BreedOut {

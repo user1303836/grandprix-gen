@@ -213,10 +213,50 @@ export class View2D {
     }
 
     this.drawTrack(state, track);
+    if (state.lockRange) this.drawLockRange(track, state.lockRange);
     if (state.showCorners) this.drawCornerNumbers(track);
     this.drawStartFinish(track);
     if (state.showControlPoints) this.drawDebug(track);
     if (this.hoverS !== null) this.drawHoverMarker(track, this.hoverS, dpr);
+  }
+
+  private drawLockRange(track: Track, lock: { sStart: number; sEnd: number }): void {
+    const ctx = this.ctx;
+    const n = track.samples.length;
+    const inRange = (s: number) => {
+      if (lock.sStart <= lock.sEnd) return s >= lock.sStart && s <= lock.sEnd;
+      return s >= lock.sStart || s <= lock.sEnd;
+    };
+    // highlight the locked arc with a wide underlay
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i <= n; i++) {
+      const p = track.samples[i % n];
+      if (inRange(p.s)) {
+        if (!started) {
+          ctx.moveTo(this.wx(p.x), this.wy(p.y));
+          started = true;
+        } else ctx.lineTo(this.wx(p.x), this.wy(p.y));
+      }
+    }
+    ctx.strokeStyle = "rgba(255, 180, 84, 0.35)";
+    ctx.lineWidth = Math.max(8, 14 * this.scale * 0.05 + 8);
+    ctx.lineCap = "round";
+    ctx.stroke();
+    // boundary ticks
+    for (const sBound of [lock.sStart, lock.sEnd]) {
+      const idx = Math.round(sBound / track.ds) % n;
+      const p = track.samples[idx];
+      const nx = -Math.sin(p.heading);
+      const ny = Math.cos(p.heading);
+      const hw = p.width / 2 + 8;
+      ctx.beginPath();
+      ctx.moveTo(this.wx(p.x + nx * hw), this.wy(p.y + ny * hw));
+      ctx.lineTo(this.wx(p.x - nx * hw), this.wy(p.y - ny * hw));
+      ctx.strokeStyle = "#ffb454";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
   }
 
   // ------------------------------------------------------------ terrain

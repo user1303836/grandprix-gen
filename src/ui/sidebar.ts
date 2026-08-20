@@ -15,6 +15,9 @@ export interface SidebarCallbacks {
   onUndo: () => void;
   onRedo: () => void;
   onHistoryJump: (index: number) => void;
+  onLockSet: (which: "start" | "end") => void;
+  onLockClear: () => void;
+  onLockRegen: () => void;
 }
 
 const P = (v: number) => `${Math.round(v * 100)}`;
@@ -183,6 +186,32 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
   }
   displayBody.push(toggleRow2);
   wrap.append(section("Display", displayBody, false));
+
+  // ---------------------------------------------------------- section lock
+  const lock = state.lockRange;
+  const lockBody: HTMLElement[] = [];
+  lockBody.push(
+    el("div", {
+      className: "hint",
+      textContent: lock
+        ? `locked: ${lock.sStart.toFixed(0)} m \u2192 ${lock.sEnd.toFixed(0)} m (hover the track in 2D, then set)`
+        : "hover the track in 2D, set a range, then regenerate everything outside it.",
+    }),
+  );
+  const lockRow = el("div", { className: "toggle-row" });
+  const setStart = el("button", { textContent: "set start" });
+  setStart.addEventListener("click", () => cb.onLockSet("start"));
+  const setEnd = el("button", { textContent: "set end" });
+  setEnd.addEventListener("click", () => cb.onLockSet("end"));
+  const clear = el("button", { textContent: "clear" });
+  clear.addEventListener("click", cb.onLockClear);
+  lockRow.append(setStart, setEnd, clear);
+  lockBody.push(lockRow);
+  const regen = el("button", { className: "primary", textContent: "REGENERATE OUTSIDE LOCK" });
+  regen.disabled = !lock;
+  regen.addEventListener("click", cb.onLockRegen);
+  lockBody.push(regen);
+  wrap.append(section("Section Lock", lockBody, false));
 
   // ---------------------------------------------------------- history
   const histBody: HTMLElement[] = [];

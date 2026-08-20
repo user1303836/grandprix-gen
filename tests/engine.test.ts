@@ -189,6 +189,35 @@ describe("terrain generation", () => {
   });
 });
 
+describe("section lock", () => {
+  it("keeps locked elements and regenerates the rest", async () => {
+    const { regenerateOutsideLock, elementSRanges } = await import("../src/core/edit");
+    const track = generateValidTrack(777, baseParams).track!;
+    const L = track.length;
+    // lock the middle third
+    const r = regenerateOutsideLock(track, { sStart: L * 0.33, sEnd: L * 0.6 }, baseParams, 424242);
+    expect(r.track).not.toBeNull();
+    const t2 = r.track!;
+    // locked elements are present verbatim in the new DNA
+    const before = elementSRanges(track);
+    const locked = before.filter((x) => {
+      const c = (x.s0 + x.s1) / 2;
+      return c >= L * 0.33 && c <= L * 0.6;
+    });
+    expect(locked.length).toBeGreaterThan(0);
+    const newElements = t2.dna.elements;
+    for (const k of locked) {
+      const found = newElements.some((e) => JSON.stringify(e) === JSON.stringify(k.el));
+      expect(found).toBe(true);
+    }
+    // still a full closed track of about the right length
+    expect(Math.abs(t2.length - baseParams.targetLength) / baseParams.targetLength).toBeLessThan(0.05);
+    // deterministic
+    const r2 = regenerateOutsideLock(track, { sStart: L * 0.33, sEnd: L * 0.6 }, baseParams, 424242);
+    expect(r2.track!.samples[100].x).toBe(t2.samples[100].x);
+  });
+});
+
 describe("fuzz invariants", () => {
   it("many random param/seed combos never produce NaN or wild geometry", () => {
     let tested = 0;
