@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Local env / editor
+.DS_Store
+*.local
+.vscode/
+.idea/
+
+# Project prompt / planning docs (not part of the repo)
+prompt.md
+additional_context.md
+
+# Logs
+*.log
