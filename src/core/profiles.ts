@@ -308,7 +308,9 @@ function baseProfiles(input: CharacterInput, identity: CircuitIdentity, bank: Fl
         : identity.runoffStyle === "asphalt"
           ? RunoffKind.Asphalt
           : -1; // mixed: per corner
-  const cornerRecords = input.corners;
+  // smooth width noise for runoff (per-sample jitter makes jagged edges)
+  const roP1 = rng.range(0, Math.PI * 2);
+  const roP2 = rng.range(0, Math.PI * 2);
   for (let i = 0; i < n; i++) {
     const k = Math.abs(input.kappa[i]);
     const cornerF = Math.min(1, k * 200);
@@ -324,21 +326,24 @@ function baseProfiles(input: CharacterInput, identity: CircuitIdentity, bank: Fl
     }
     runoffL[i] = rkL;
     runoffR[i] = rkR;
-    // faster corner = more runoff; straights get less
-    const rwBase = 6 + cornerF * 9 + rng.spread(1.5);
+    // faster corner = more runoff; straights get less; smooth low-freq variation
+    const t = (i / n) * Math.PI * 2;
+    const roNoise = 0.7 * Math.sin(2.3 * t + roP1) + 0.5 * Math.sin(4.7 * t + roP2);
+    const rwBase = 6 + cornerF * 9 + roNoise;
     runoffWidthL[i] = rwBase;
     runoffWidthR[i] = rwBase;
-    // barriers
+    // barriers (smooth variation; style sets the baseline)
     const bBase =
       identity.barrierStyle === "armco-close"
-        ? 5 + rng.range(0, 7)
+        ? 7
         : identity.barrierStyle === "modern-setback"
-          ? 24 + rng.range(0, 30)
-          : 10 + rng.range(0, 24);
-    barrierDistL[i] = rkL === RunoffKind.Wall ? 1.2 : bBase;
-    barrierDistR[i] = rkR === RunoffKind.Wall ? 1.2 : bBase;
+          ? 32
+          : 16;
+    const bNoise = 0.5 * Math.sin(2.9 * t + roP1) + 0.5 * Math.sin(5.3 * t + roP2);
+    const bVar = identity.barrierStyle === "modern-setback" ? 14 : 6;
+    barrierDistL[i] = rkL === RunoffKind.Wall ? 1.2 : Math.max(3, bBase + bNoise * bVar);
+    barrierDistR[i] = rkR === RunoffKind.Wall ? 1.2 : Math.max(3, bBase + bNoise * bVar);
   }
-  void cornerRecords;
 
   return {
     widthL,

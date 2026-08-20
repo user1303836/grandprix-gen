@@ -90,11 +90,15 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
   const runoffWL = (i: number) => (props ? props.runoffWidthL[i] : runoffFallback);
   const runoffWR = (i: number) => (props ? props.runoffWidthR[i] : runoffFallback);
 
-  // seeded mottle for pavement texture (deterministic per track)
+  // seeded low-frequency mottle for pavement texture (deterministic)
+  const motK1 = 1.7 + ((track.seed % 17) / 17) * 1.6;
+  const motK2 = 4.3 + ((track.seed % 31) / 31) * 2.4;
+  const motP1 = (track.seed % 251) * 0.13;
+  const motP2 = (track.seed % 197) * 0.21;
   const mottle = (i: number, rough: number): number => {
-    const v = Math.sin(i * 12.9898 + track.seed * 0.078) * 43758.5453;
-    const f = v - Math.floor(v);
-    return 1 + (f - 0.5) * (0.08 + rough * 0.22);
+    const t = (i / m) * Math.PI * 2;
+    const low = 0.5 * Math.sin(motK1 * t + motP1) + 0.5 * Math.sin(motK2 * t + motP2);
+    return 1 + low * (0.05 + rough * 0.14);
   };
 
   for (let r = 0; r < m; r++) {
@@ -145,7 +149,7 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       normals[vi] = -sinB * -Math.sin(s.heading);
       normals[vi + 1] = -sinB * Math.cos(s.heading);
       normals[vi + 2] = cosB;
-      uvs[(r * cols + c) * 2] = (si * track.ds) / 8;
+      uvs[(r * cols + c) * 2] = (si * track.ds) / 6;
       uvs[(r * cols + c) * 2 + 1] = c / (cols - 1);
       // colors: asphalt band carries surface tint + mottle
       const ci = (r * cols + c) * 3;

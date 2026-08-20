@@ -56,7 +56,7 @@ const PART_COLORS: Record<string, number> = {
 const KERB_COLORS: Record<string, number> = {
   flat: 0xd8d4d0,
   standard: 0xffffff, // striped texture
-  aggressive: 0xd45500,
+  aggressive: 0xc95a10,
 };
 
 const RUNOFF_COLORS: Record<string, number> = {
@@ -644,9 +644,9 @@ function makeCurbStripeTexture(): CanvasTexture {
   cv.width = 64;
   cv.height = 8;
   const ctx = cv.getContext("2d")!;
-  ctx.fillStyle = "#c8302c";
+  ctx.fillStyle = "#b23a33";
   ctx.fillRect(0, 0, 32, 8);
-  ctx.fillStyle = "#e8e8e8";
+  ctx.fillStyle = "#d8d4d0";
   ctx.fillRect(32, 0, 32, 8);
   const tex = new CanvasTexture(cv);
   tex.wrapS = RepeatWrapping;
