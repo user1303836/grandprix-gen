@@ -61,9 +61,9 @@ export class TerrainGrid {
 
   /** Bilinear elevation at local (x, y). NaN outside the grid. */
   elevationAt(x: number, y: number): number {
-    const gx = (x - this.originX) / this.resolution - 0.5;
-    const gy = (y - this.originY) / this.resolution - 0.5;
-    if (gx < -0.5 || gy < -0.5 || gx > this.width - 0.5 || gy > this.height - 0.5) {
+    const gx = (x - this.originX) / this.resolution;
+    const gy = (y - this.originY) / this.resolution;
+    if (gx < -0.001 || gy < -0.001 || gx > this.width - 1 + 0.001 || gy > this.height - 1 + 0.001) {
       return NaN;
     }
     const x0 = Math.max(0, Math.min(this.width - 2, Math.floor(gx)));
@@ -105,8 +105,8 @@ export class TerrainGrid {
   /** Slope magnitude (rise/run) at local (x,y). */
   slopeAt(x: number, y: number): number {
     const slope = this.computeSlope();
-    const gx = Math.round((x - this.originX) / this.resolution - 0.5);
-    const gy = Math.round((y - this.originY) / this.resolution - 0.5);
+    const gx = Math.round((x - this.originX) / this.resolution);
+    const gy = Math.round((y - this.originY) / this.resolution);
     if (gx < 0 || gy < 0 || gx >= this.width || gy >= this.height) return 0;
     return slope[gy * this.width + gx];
   }
