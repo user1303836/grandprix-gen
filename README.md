@@ -12,7 +12,9 @@ exports (CAD / GIS / Civil 3D / Blender / simulation).
 
 ![2D design view with candidate search](docs/screenshot-2d.png)
 
-![terrain-mode 2D: a scouted mountain circuit](docs/screenshot-terrain-2d.png)
+![terrain-mode 2D: a circuit threading through a real town, contour lines + OSM buildings](docs/screenshot-terrain-2d.png)
+
+![3D: shadow-mapped terrain with surrounding context, OSM buildings, trees](docs/screenshot-terrain-3d.png)
 
 ![onboard drive mode on a mountain circuit](docs/screenshot-terrain-drive.png)
 
@@ -48,10 +50,13 @@ Everything is browser-local. No backend. Terrain DEM comes from
    place a site, load the Mapterhorn DEM, and generate circuits where terrain
    is a *design constraint*: horizontal layouts are scored by grade-feasible
    earthwork, the vertical profile hugs the ground inside a cut/fill band with
-   hard grade limits. **SCOUT REGION** searches a whole region for promising
-   sub-sites first (nested site→circuit optimization).
+   hard grade limits. OSM building footprints render as context and (soft/hard)
+   steer generation around development. **SCOUT REGION** searches a whole
+   region for promising sub-sites first (nested site→circuit optimization).
 7. **Views** — 2D design view (heat layers: curvature / speed / elevation /
-   grade / cut-fill / banking), 3D view (banked ribbon, carved terrain, orbit),
+   grade / cut-fill / banking; contour lines; building footprints), 3D view
+   (banked ribbon, striped kerbs where the car actually uses them, edge lines,
+   carved + shadowed terrain, surrounding context, trees, buildings, water),
    DRIVE mode (onboard lap at the estimated speed profile).
 8. **Export** — `.track.json` (lossless project), SVG, CSV, GeoJSON, DXF,
    LandXML (Civil 3D), OBJ, GLB, Blender reconstruction `.py`, OpenDRIVE
