@@ -2,7 +2,7 @@
  * Worker client: promise-based job dispatch with progress callbacks.
  */
 
-type Cmd = "generate" | "search" | "morph" | "breed";
+type Cmd = "generate" | "search" | "morph" | "breed" | "scout";
 
 interface Pending {
   resolve: (v: unknown) => void;

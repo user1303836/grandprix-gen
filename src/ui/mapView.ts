@@ -16,6 +16,19 @@ export interface SiteSelection {
   radiusMeters: number;
 }
 
+export interface ScoutSiteResult {
+  x: number;
+  y: number;
+  lat: number;
+  lon: number;
+  radiusMeters: number;
+  relief: number;
+  roughness: number;
+  meanSlope: number;
+  score: number;
+  label: string;
+}
+
 export class MapView {
   private map: MLMap | null = null;
   private marker: Marker | null = null;
@@ -26,6 +39,8 @@ export class MapView {
   private circleSource = "site-circle";
   onConfirm: ((sel: SiteSelection, grid: TerrainGrid) => void) | null = null;
   onBusy: ((msg: string | null, progress: number | null) => void) | null = null;
+  onScout: ((sel: SiteSelection) => Promise<ScoutSiteResult[] | null>) | null = null;
+  onScoutPick: ((site: ScoutSiteResult) => void) | null = null;
   private fetching = false;
 
   constructor(container: HTMLElement) {
@@ -116,8 +131,46 @@ export class MapView {
     confirm.disabled = !this.center || this.fetching;
     confirm.addEventListener("click", () => void this.confirm());
     this.panel.append(confirm);
+    const scout = el("button", {
+      textContent: "SCOUT REGION FOR SITES",
+      title: "load the region DEM and search it for promising circuit sub-sites",
+    });
+    scout.disabled = !this.center || this.fetching;
+    scout.addEventListener("click", () => void this.scout());
+    this.panel.append(scout);
     this.panel.append(this.statusEl);
     this.updatePanel();
+  }
+
+  private async scout(): Promise<void> {
+    if (!this.center || this.fetching || !this.onScout) return;
+    this.fetching = true;
+    this.renderPanel();
+    const results = await this.onScout({
+      lat: this.center.lat,
+      lon: this.center.lon,
+      radiusMeters: this.radiusM,
+    });
+    this.fetching = false;
+    this.renderPanel();
+    if (!results || results.length === 0) {
+      this.statusEl.textContent = "scout found no viable sub-sites here.";
+      return;
+    }
+    // draw site markers + list
+    const list = el("div", { className: "history-list" });
+    for (const s of results) {
+      const item = el("div", { className: "history-item" }, [
+        el("span", { textContent: s.label }),
+        el("span", { textContent: `Δ${s.relief.toFixed(0)}m q${(s.score * 100).toFixed(0)}` }),
+      ]);
+      item.title = `relief ${s.relief.toFixed(0)} m · slope ${(s.meanSlope * 100).toFixed(0)}% · score ${(s.score * 100).toFixed(0)}`;
+      item.addEventListener("click", () => this.onScoutPick?.(s));
+      list.append(item);
+      new Marker({ color: "#ffb454" }).setLngLat([s.lon, s.lat]).addTo(this.map!);
+    }
+    this.panel.append(el("div", { className: "hint", textContent: "scouted sub-sites (click to use):" }));
+    this.panel.append(list);
   }
 
   private updatePanel(): void {

@@ -4,7 +4,8 @@
  */
 
 import { generateValidTrack } from "../core/generator";
-import { generateTerrainTrack } from "../core/terrainGen";
+import { generateTerrainTrack, scoutSites } from "../core/terrainGen";
+import { localToGeo } from "../core/geo";
 import { searchCandidates, type Candidate } from "../core/search";
 import { breedTracks } from "../core/breed";
 import { computeSpeedProfile, VEHICLE_PRESETS, type SpeedProfile, type VehicleSpec } from "../core/vehicle";
@@ -153,6 +154,39 @@ export function runMorph(job: MorphJob): AnalysisOut | null {
     : morphTrack(job.track, job.params, terrainOpts);
   if (!r.track) return null;
   return analyze(r.track, vehicle);
+}
+
+export interface ScoutJob {
+  params: TrackParams;
+  terrain: TerrainGridData;
+  regionRadiusMeters: number;
+  count: number;
+}
+
+export interface ScoutOut {
+  sites: {
+    x: number;
+    y: number;
+    lat: number;
+    lon: number;
+    radiusMeters: number;
+    relief: number;
+    roughness: number;
+    meanSlope: number;
+    score: number;
+    label: string;
+  }[];
+}
+
+export function runScout(job: ScoutJob): ScoutOut {
+  const grid = dataToGrid(job.terrain);
+  const found = scoutSites(grid, job.params, job.regionRadiusMeters, job.count);
+  return {
+    sites: found.map((s) => {
+      const geo = localToGeo(grid.frame, s.x, s.y);
+      return { ...s, lat: geo.lat, lon: geo.lon };
+    }),
+  };
 }
 
 export interface BreedJob {

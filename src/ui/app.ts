@@ -79,6 +79,8 @@ export class App {
     this.mapView = new MapView(this.viewportEl);
     this.mapView.onConfirm = (sel, grid) => this.onSiteConfirm(sel, grid);
     this.mapView.onBusy = (msg, p) => this.setBusy(msg, p);
+    this.mapView.onScout = (sel) => this.runScout(sel);
+    this.mapView.onScoutPick = (site) => void this.useScoutedSite(site);
 
     this.overlayEl = el("div", { className: "progress-overlay", style: "display:none" });
     this.viewportEl.append(this.overlayEl);
@@ -422,6 +424,66 @@ export class App {
   private onSiteConfirm(sel: SiteSelection, grid: import("../core/terrain").TerrainGrid): void {
     const site = { lat: sel.lat, lon: sel.lon, radiusMeters: sel.radiusMeters };
     this.store.set({ terrain: grid, site }, "terrain", "site");
+    this.setView("2d");
+    void this.generate();
+  }
+
+  /** Scout a region: load a wide DEM, search it for promising sub-sites. */
+  private async runScout(sel: SiteSelection): Promise<import("./mapView").ScoutSiteResult[] | null> {
+    const { makeLocalFrame } = await import("../core/geo");
+    const { fetchMapterhornGrid } = await import("../core/terrain");
+    const regionRadius = Math.max(sel.radiusMeters * 1.6, 3600);
+    try {
+      this.setBusy("SCOUT: LOADING REGION DEM", 0);
+      const frame = makeLocalFrame({ lat: sel.lat, lon: sel.lon });
+      const grid = await fetchMapterhornGrid(frame, regionRadius, 45, (d, t) => {
+        this.setBusy(`SCOUT: LOADING DEM ${d}/${t}`, d / t);
+      });
+      this.setBusy("SCOUT: ANALYZING TERRAIN", 0.6);
+      const out = await this.engine.run<import("../engine/jobs").ScoutOut>("scout", {
+        params: this.store.state.params,
+        terrain: gridToData(grid),
+        regionRadiusMeters: regionRadius,
+        count: 6,
+      });
+      // keep the region grid for the picked site
+      this.scoutGrid = grid;
+      this.scoutCenter = sel;
+      return out.sites;
+    } catch (e) {
+      console.error(e);
+      return null;
+    } finally {
+      this.setBusy(null, null);
+    }
+  }
+
+  private scoutGrid: import("../core/terrain").TerrainGrid | null = null;
+  private scoutCenter: SiteSelection | null = null;
+
+  private async useScoutedSite(site: import("./mapView").ScoutSiteResult): Promise<void> {
+    if (!this.scoutGrid || !this.scoutCenter) return;
+    // sub-grid the region DEM around the picked site
+    const { TerrainGrid } = await import("../core/terrain");
+    const { makeLocalFrame, geoToLocal } = await import("../core/geo");
+    const g = this.scoutGrid;
+    const frame = makeLocalFrame({ lat: site.lat, lon: site.lon });
+    const radius = site.radiusMeters * 1.15;
+    const res = g.resolution;
+    const n = Math.ceil((radius * 2) / res);
+    const elev = new Float32Array(n * n);
+    const origin = geoToLocal(g.frame, { lat: site.lat, lon: site.lon });
+    for (let iy = 0; iy < n; iy++) {
+      for (let ix = 0; ix < n; ix++) {
+        const x = origin.x - radius + ix * res;
+        const y = origin.y - radius + iy * res;
+        const z = g.elevationAt(x, y);
+        elev[iy * n + ix] = Number.isFinite(z) ? z : 0;
+      }
+    }
+    const sub = new TerrainGrid(frame, res, n, n, -radius, -radius, elev);
+    const siteRef = { lat: site.lat, lon: site.lon, radiusMeters: site.radiusMeters };
+    this.store.set({ terrain: sub, site: siteRef }, "terrain", "site");
     this.setView("2d");
     void this.generate();
   }
