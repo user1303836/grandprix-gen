@@ -10,11 +10,13 @@
 import { Rng, saltSeed } from "./prng";
 import {
   elementsTotalLength,
+  kappaFromElements,
   scaleStraights,
   preCloseElements,
   type CornerGeom,
   cornerLengths,
 } from "./elements";
+import { analyzeIntersections, integrateKappa } from "./geometry";
 import { buildTrack, defaultDeform, makeDNA, type BuildOptions, type BuildResult } from "./build";
 import { validateTrack } from "./validate";
 import type { AlignmentElement, TrackParams } from "./types";
@@ -153,10 +155,21 @@ export function generateElements(rng: Rng, params: TrackParams): AlignmentElemen
   const events: { specs: CornerSpec[]; connectors: number[] }[] = [];
   let used = 0;
   let guard = 0;
+  // anti-spiral: complexes must snake, not coil -- consecutive events
+  // alternate direction with high probability (esp. when technical)
+  let prevDir: 1 | -1 = 1;
+  let sameDirRun = 0;
   while (used < budget && guard++ < 200) {
     const kind = pickCornerKind(rng, params);
-    const wantRight = rng.bool(dirPref);
+    let wantRight = rng.bool(dirPref);
+    const flipProb = 0.55 + params.technicality * 0.25 + sameDirRun * 0.18;
+    if (rng.bool(flipProb)) {
+      wantRight = prevDir === 1;
+    }
     const dir: 1 | -1 = wantRight ? -1 : 1; // +1 = left
+    if (dir === prevDir) sameDirRun++;
+    else sameDirRun = 0;
+    prevDir = dir;
     const ev = expandEvent(rng, params, kind, dir);
     if (used + ev.corners.length > budget + 2) continue;
     events.push({ specs: ev.corners, connectors: ev.connectors });
@@ -267,6 +280,18 @@ export function generateTrack(seed: number, params: TrackParams, opts: BuildOpti
   }
 
   elements = preCloseElements(elements, 4);
+
+  // cheap pre-check: integrate the coarse element shape and reject
+  // self-intersecting layouts before the expensive full build
+  {
+    const profile = kappaFromElements(elements, 3);
+    const curve = integrateKappa(profile.kappa, profile.ds);
+    const inter = analyzeIntersections(curve.x, curve.y, profile.ds, 8);
+    if (inter.intersections > 0) {
+      return { track: null, closureError: Infinity, failReason: "element-self-intersection" };
+    }
+  }
+
   const deform = defaultDeform(rng, params);
   const dna = makeDNA(elements, deform, {
     severity: params.curvatureSeverity,

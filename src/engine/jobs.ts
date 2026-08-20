@@ -79,7 +79,8 @@ export function runGenerate(job: GenerateJob): AnalysisOut | null {
     if (!r.track) return null;
     return analyze(r.track, vehicle);
   }
-  const r = generateValidTrack(job.seed, job.params, {}, 12);
+  const attempts = job.params.cornerCount > 16 ? 16 : 12;
+  const r = generateValidTrack(job.seed, job.params, {}, attempts);
   if (!r.track) return null;
   return analyze(r.track, vehicle);
 }

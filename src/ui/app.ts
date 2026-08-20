@@ -276,11 +276,16 @@ export class App {
         },
         (d, t) => this.setBusy("GENERATING", d / t),
       );
-      if (out) this.adoptAnalysis(out, `gen ${s.seed.toString(36)}`);
+      if (out) {
+        this.adoptAnalysis(out, `gen ${s.seed.toString(36)}`);
+      } else {
+        this.setBusy("NO VALID LAYOUT FOR THIS SEED — try another", null);
+        setTimeout(() => this.setBusy(null, null), 2200);
+      }
     } catch (e) {
       console.error(e);
     } finally {
-      this.setBusy(null, null);
+      if (this.store.state.busy?.startsWith("GENERATING")) this.setBusy(null, null);
     }
   }
 
