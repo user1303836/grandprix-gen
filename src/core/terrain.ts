@@ -126,10 +126,63 @@ export class TerrainGrid {
 // Corridor carving
 // ---------------------------------------------------------------------------
 
+export interface TrackProximity {
+  /** nearest track sample: horizontal distance + its elevation (null if far) */
+  nearest(x: number, y: number, maxDist?: number): { d: number; z: number } | null;
+  /** all samples within maxDist (for elevation-aware matching) */
+  within(x: number, y: number, maxDist: number): { d: number; z: number }[];
+}
+
+/** Spatial-hash proximity index over track samples. */
+export function makeTrackProximity(
+  trackSamples: { x: number; y: number; z: number }[],
+): TrackProximity {
+  const bucketSize = 128;
+  const buckets = new Map<string, number[]>();
+  trackSamples.forEach((p, i) => {
+    const k = `${Math.floor(p.x / bucketSize)},${Math.floor(p.y / bucketSize)}`;
+    let arr = buckets.get(k);
+    if (!arr) buckets.set(k, (arr = []));
+    arr.push(i);
+  });
+  const gather = (x: number, y: number, maxDist: number): { d: number; z: number }[] => {
+    const bx = Math.floor(x / bucketSize);
+    const by = Math.floor(y / bucketSize);
+    const r = Math.ceil(maxDist / bucketSize);
+    const out: { d: number; z: number }[] = [];
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const arr = buckets.get(`${bx + dx},${by + dy}`);
+        if (!arr) continue;
+        for (const i of arr) {
+          const p = trackSamples[i];
+          const d = Math.hypot(p.x - x, p.y - y);
+          if (d <= maxDist) out.push({ d, z: p.z });
+        }
+      }
+    }
+    return out;
+  };
+  return {
+    nearest(x, y, maxDist = Infinity) {
+      const cands = gather(x, y, Math.min(maxDist, bucketSize * 2.5));
+      let best: { d: number; z: number } | null = null;
+      for (const c of cands) {
+        if (!best || c.d < best.d) best = c;
+      }
+      if (!best || best.d > maxDist) return null;
+      return best;
+    },
+    within: gather,
+  };
+}
+
 /**
  * Wrap a terrain sampler so the ground is flattened toward the road
  * elevation near the track corridor (the way driving sims seat the road
- * into the landscape). Returns sampler + corridor half-width used.
+ * into the landscape). Elevation-aware: where two track sections approach
+ * a point, the one whose elevation is most compatible with the local
+ * ground wins, so bridges/cuts don't flatten terrain to the wrong deck.
  */
 export function carveSampler(
   grid: TerrainGrid,
@@ -137,49 +190,32 @@ export function carveSampler(
   innerM = 26,
   outerM = 110,
 ): (x: number, y: number) => number {
-  // spatial hash of track samples (coarse buckets)
-  const bucketSize = 128;
-  const buckets = new Map<string, number[]>();
-  const key = (x: number, y: number) => `${Math.floor(x / bucketSize)},${Math.floor(y / bucketSize)}`;
-  trackSamples.forEach((p, i) => {
-    const k = key(p.x, p.y);
-    let arr = buckets.get(k);
-    if (!arr) buckets.set(k, (arr = []));
-    arr.push(i);
-  });
-  const nearest = (x: number, y: number): { d: number; z: number } | null => {
-    const bx = Math.floor(x / bucketSize);
-    const by = Math.floor(y / bucketSize);
-    let best = Infinity;
-    let bestZ = 0;
-    for (let r = 1; r <= 2; r++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const arr = buckets.get(`${bx + dx},${by + dy}`);
-          if (!arr) continue;
-          for (const i of arr) {
-            const p = trackSamples[i];
-            const d = Math.hypot(p.x - x, p.y - y);
-            if (d < best) {
-              best = d;
-              bestZ = p.z;
-            }
-          }
-        }
-      }
-      if (best < bucketSize * r) return { d: best, z: bestZ };
-    }
-    return best < Infinity ? { d: best, z: bestZ } : null;
-  };
+  const proximity = makeTrackProximity(trackSamples);
   return (x: number, y: number) => {
     const gz = grid.elevationAt(x, y);
     if (Number.isNaN(gz)) return gz;
-    const hit = nearest(x, y);
-    if (!hit || hit.d >= outerM) return gz;
-    if (hit.d <= innerM) return hit.z;
-    const t = (hit.d - innerM) / (outerM - innerM);
+    // elevation-aware pick: of the sections near this point, carve toward
+    // the one most compatible with the local ground (a bridge deck 80 m
+    // overhead must not flatten the valley floor beneath it)
+    const cands = proximity.within(x, y, outerM);
+    if (cands.length === 0) return gz;
+    let best: { d: number; z: number } | null = null;
+    let bestScore = Infinity;
+    for (const c of cands) {
+      const score = c.d + 2.5 * Math.abs(c.z - gz);
+      if (score < bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    if (!best) return gz;
+    // extreme deviations are structures, not earthworks: leave the ground
+    // alone (the deck floats overhead / the tunnel dives beneath)
+    if (Math.abs(best.z - gz) > 45) return gz;
+    if (best.d <= innerM) return best.z;
+    const t = (best.d - innerM) / (outerM - innerM);
     const s = t * t * (3 - 2 * t);
-    return hit.z * (1 - s) + gz * s;
+    return best.z * (1 - s) + gz * s;
   };
 }
 

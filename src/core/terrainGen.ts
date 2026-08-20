@@ -9,6 +9,7 @@
 import { generateValidTrack, type ValidResult } from "./generator";
 import { computeSpeedProfile, VEHICLE_PRESETS } from "./vehicle";
 import { gradeLimit } from "./vertical";
+import { maskHit } from "./osm";
 import type { TerrainGrid } from "./terrain";
 import type { SiteRef, TrackParams } from "./types";
 
@@ -16,6 +17,8 @@ export interface TerrainGenOptions {
   site?: SiteRef;
   candidates?: number;
   onProgress?: (done: number, total: number) => void;
+  /** Building avoidance mask (local coords) + strength 0..1. */
+  avoidBuildings?: { mask: import("./osm").BuildingMask; strength: number } | null;
 }
 
 /**
@@ -29,6 +32,7 @@ export function terrainCost(
   heading: Float64Array,
   grid: TerrainGrid,
   params: TrackParams,
+  avoid?: { mask: import("./osm").BuildingMask; strength: number } | null,
 ): number {
   const n = xs.length;
   let crossSlopeSum = 0;
@@ -74,11 +78,21 @@ export function terrainCost(
   const wantRelief = params.elevationIntensity * (L / 1000) * 24;
   const reliefErr = Math.abs(relief - wantRelief) / Math.max(30, wantRelief);
 
+  // building avoidance: fraction of the line hitting the mask
+  let buildingHits = 0;
+  if (avoid) {
+    for (let i = 0; i < n; i += step) {
+      if (maskHit(avoid.mask, xs[i], ys[i])) buildingHits++;
+    }
+  }
+  const buildingFrac = buildingHits / Math.max(1, valid);
+
   const adherence = params.terrainAdherence;
   const earthworkWeight = 1.6 - params.earthworkTolerance * 1.3; // low tolerance => strong penalty
   const cost =
     adherence * (crossSlope * 2.0 + earthwork * earthworkWeight * 0.45) +
-    reliefErr * 0.5;
+    reliefErr * 0.5 +
+    (avoid ? avoid.strength * buildingFrac * 6 : 0);
   return cost;
 }
 
@@ -118,7 +132,7 @@ export function generateTerrainTrack(
       ys[i] = r.track.samples[i].y;
       hd[i] = r.track.samples[i].heading;
     }
-    const cost = terrainCost(xs, ys, hd, grid, params);
+    const cost = terrainCost(xs, ys, hd, grid, params, opts.avoidBuildings);
     const score = cost + (r.attempts - 1) * 0.35; // prefer easy validity too
     if (!best || score < (best.terrainCost ?? Infinity)) {
       best = { ...r, terrainCost: score };

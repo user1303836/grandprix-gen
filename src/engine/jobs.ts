@@ -4,7 +4,7 @@
  */
 
 import { generateValidTrack } from "../core/generator";
-import { generateTerrainTrack, scoutSites } from "../core/terrainGen";
+import { generateTerrainTrack, scoutSites, terrainCost } from "../core/terrainGen";
 import { localToGeo } from "../core/geo";
 import { searchCandidates, type Candidate } from "../core/search";
 import { breedTracks } from "../core/breed";
@@ -13,6 +13,7 @@ import { computeMetrics, type CircuitMetrics } from "../core/metrics";
 import { validateTrack, type ValidationReport } from "../core/validate";
 import { morphTrack, regenerateStructure } from "../core/morph";
 import { regenerateOutsideLock } from "../core/edit";
+import { saltSeed } from "../core/prng";
 import { TerrainGrid } from "../core/terrain";
 import type { SiteRef, Track, TrackParams } from "../core/types";
 
@@ -64,6 +65,8 @@ export interface GenerateJob {
   site?: SiteRef | null;
   terrain?: TerrainGridData | null;
   terrainCandidates?: number;
+  /** building avoidance mask + strength (0 = off) */
+  avoidBuildings?: { mask: import("../core/osm").BuildingMask; strength: number } | null;
   onProgress?: (done: number, total: number) => void;
 }
 
@@ -73,8 +76,9 @@ export function runGenerate(job: GenerateJob): AnalysisOut | null {
     const grid = dataToGrid(job.terrain);
     const r = generateTerrainTrack(job.seed, job.params, grid, {
       site: job.site ?? undefined,
-      candidates: job.terrainCandidates ?? 8,
+      candidates: job.terrainCandidates ?? 12,
       onProgress: job.onProgress,
+      avoidBuildings: job.avoidBuildings ?? null,
     });
     if (!r.track) return null;
     return analyze(r.track, vehicle);
@@ -93,6 +97,7 @@ export interface SearchJob {
   keep: number;
   site?: SiteRef | null;
   terrain?: TerrainGridData | null;
+  avoidBuildings?: { mask: import("../core/osm").BuildingMask; strength: number } | null;
   onProgress?: (done: number, total: number) => void;
 }
 
@@ -120,6 +125,22 @@ export function runSearch(job: SearchJob): SearchOut {
     candidates: job.count,
     keep: job.keep,
     onProgress: job.onProgress,
+    candidateCost: job.terrain
+      ? (track) => {
+          const grid = dataToGrid(job.terrain!);
+          const n = track.samples.length;
+          const xs = new Float64Array(n);
+          const ys = new Float64Array(n);
+          const hd = new Float64Array(n);
+          for (let i = 0; i < n; i++) {
+            xs[i] = track.samples[i].x;
+            ys[i] = track.samples[i].y;
+            hd[i] = track.samples[i].heading;
+          }
+          return terrainCost(xs, ys, hd, grid, job.params, job.avoidBuildings ?? null);
+        }
+      : undefined,
+    costWeight: 9,
     ...terrainOpts,
   });
   // attach speed to samples for downstream use
@@ -151,9 +172,24 @@ export function runMorph(job: MorphJob): AnalysisOut | null {
         };
       })()
     : {};
-  const r = job.structural
-    ? regenerateStructure(job.track.seed, job.params, terrainOpts)
-    : morphTrack(job.track, job.params, terrainOpts);
+  if (job.structural) {
+    // structural re-synthesis needs the same rejection sampling as fresh
+    // generation: new topologies can self-intersect
+    let best: AnalysisOut | null = null;
+    let bestIssues = Infinity;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const r = regenerateStructure(saltSeed(job.track.seed, attempt * 733), job.params, terrainOpts);
+      if (!r.track) continue;
+      const out = analyze(r.track, vehicle);
+      if (out.validation.valid) return out;
+      if (out.validation.issues.length < bestIssues) {
+        bestIssues = out.validation.issues.length;
+        best = out;
+      }
+    }
+    return best;
+  }
+  const r = morphTrack(job.track, job.params, terrainOpts);
   if (!r.track) return null;
   return analyze(r.track, vehicle);
 }
@@ -229,15 +265,26 @@ export function runLockRegen(job: LockRegenJob): AnalysisOut | null {
         };
       })()
     : {};
-  const r = regenerateOutsideLock(
-    job.track,
-    { sStart: job.lockStart, sEnd: job.lockEnd },
-    job.params,
-    job.seed,
-    terrainOpts,
-  );
-  if (!r.track) return null;
-  return analyze(r.track, vehicle);
+  // splicing can self-intersect too: retry with salted seeds
+  let best: AnalysisOut | null = null;
+  let bestIssues = Infinity;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const r = regenerateOutsideLock(
+      job.track,
+      { sStart: job.lockStart, sEnd: job.lockEnd },
+      job.params,
+      saltSeed(job.seed, attempt * 391),
+      terrainOpts,
+    );
+    if (!r.track) continue;
+    const out = analyze(r.track, vehicle);
+    if (out.validation.valid) return out;
+    if (out.validation.issues.length < bestIssues) {
+      bestIssues = out.validation.issues.length;
+      best = out;
+    }
+  }
+  return best;
 }
 
 export function runBreed(job: BreedJob): BreedOut {

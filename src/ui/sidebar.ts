@@ -122,6 +122,21 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
         sliderRow("max cut (m)", { min: 2, max: 40, step: 1, value: p.maxCut, badge: "morph", format: (v) => v.toFixed(0), onInput: morph("maxCut"), onCommit: morphCommit("maxCut") }),
         sliderRow("max fill (m)", { min: 2, max: 40, step: 1, value: p.maxFill, badge: "morph", format: (v) => v.toFixed(0), onInput: morph("maxFill"), onCommit: morphCommit("maxFill") }),
         sliderRow("contour following", { min: 0, max: 1, step: 0.01, value: p.contourFollowing, badge: "morph", format: P, onInput: morph("contourFollowing"), onCommit: morphCommit("contourFollowing") }),
+        (() => {
+          const row = el("div", { className: "toggle-row" });
+          row.append(el("span", { className: "hint", textContent: "avoid buildings:", style: "align-self:center" }));
+          for (const mode of ["off", "soft", "hard"] as const) {
+            const b = el("button", { textContent: mode });
+            if (state.avoidBuildings === mode) b.classList.add("active");
+            b.addEventListener("click", () => {
+              cb.onDisplay({ avoidBuildings: mode });
+              row.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+              b.classList.add("active");
+            });
+            row.append(b);
+          }
+          return row;
+        })(),
         el("div", { className: "hint", textContent: "adherence = route follows the land; earthwork = how far the road elevation may deviate from ground (civil engineering freedom)." }),
         (() => {
           const b = el("button", { textContent: "CLEAR SITE (blank canvas)" });

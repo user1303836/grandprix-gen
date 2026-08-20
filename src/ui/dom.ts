@@ -57,16 +57,20 @@ export function sliderRow(label: string, opts: SliderOpts): HTMLElement {
   return el("div", { className: "ctl" }, [labelEl, out, input]);
 }
 
+/** Section open/closed state persists across sidebar rebuilds. */
+const sectionOpenState = new Map<string, boolean>();
+
 export function section(title: string, body: HTMLElement[], open = true): HTMLElement {
-  const chev = el("span", { className: "chev", textContent: open ? "−" : "+" });
-  const head = el("button", { className: "section-head" }, [title === "" ? "" : title, " ", chev]);
-  head.textContent = title + " ";
-  head.append(chev);
+  const isOpen = sectionOpenState.get(title) ?? open;
+  const chev = el("span", { className: "chev", textContent: isOpen ? "−" : "+" });
+  const head = el("button", { className: "section-head" }, [title, " ", chev]);
   const bodyEl = el("div", { className: "section-body" }, body);
-  const sec = el("div", { className: `section${open ? "" : " collapsed"}` }, [head, bodyEl]);
+  const sec = el("div", { className: `section${isOpen ? "" : " collapsed"}` }, [head, bodyEl]);
   head.addEventListener("click", () => {
     sec.classList.toggle("collapsed");
-    chev.textContent = sec.classList.contains("collapsed") ? "+" : "−";
+    const nowOpen = !sec.classList.contains("collapsed");
+    sectionOpenState.set(title, nowOpen);
+    chev.textContent = nowOpen ? "−" : "+";
   });
   return sec;
 }

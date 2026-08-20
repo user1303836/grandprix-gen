@@ -18,8 +18,6 @@ export class View2D {
   private lastX = 0;
   private lastY = 0;
   private fittedFor: Track | null = null;
-  private terrainCanvas: HTMLCanvasElement | null = null;
-  private terrainFor: TerrainGrid | null = null;
   /** Set by the app when overlays change; forces a refit on next render. */
   needsFit = true;
   onStationHover: ((s: number | null) => void) | null = null;
@@ -129,6 +127,91 @@ export class View2D {
     return best < maxDist * maxDist ? bestS : null;
   }
 
+  private terrainCache = new Map<TerrainGrid, HTMLCanvasElement>();
+  private buildingsFor: unknown = null;
+  private buildingsCanvas: HTMLCanvasElement | null = null;
+
+  private terrainCanvasFor(grid: TerrainGrid): HTMLCanvasElement {
+    let cv = this.terrainCache.get(grid);
+    if (!cv) {
+      cv = this.buildTerrainCanvas(grid);
+      this.terrainCache.set(grid, cv);
+    }
+    return cv;
+  }
+
+  private drawGridBackdrop(grid: TerrainGrid, alpha: number): void {
+    const ctx = this.ctx;
+    const tc = this.terrainCanvasFor(grid);
+    ctx.imageSmoothingEnabled = true;
+    const x0 = this.wx(grid.originX);
+    const y0 = this.wy(grid.originY + grid.height * grid.resolution);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(
+      tc,
+      x0,
+      y0,
+      grid.width * grid.resolution * this.scale,
+      grid.height * grid.resolution * this.scale,
+    );
+    ctx.globalAlpha = 1;
+  }
+
+  private drawBuildings(buildings: { footprint: [number, number][] }[]): void {
+    if (this.buildingsFor !== buildings || !this.buildingsCanvas) {
+      this.buildingsFor = buildings;
+      // cache to an offscreen canvas at fixed resolution over the site bbox
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const b of buildings) {
+        for (const [x, y] of b.footprint) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+      const spanX = Math.max(50, maxX - minX);
+      const spanY = Math.max(50, maxY - minY);
+      const res = Math.max(1, Math.min(8, spanX / 700)); // ~m/px
+      const cv = document.createElement("canvas");
+      cv.width = Math.ceil(spanX / res);
+      cv.height = Math.ceil(spanY / res);
+      const c2 = cv.getContext("2d")!;
+      c2.fillStyle = "rgba(28,26,24,0.75)";
+      c2.strokeStyle = "rgba(70,64,58,0.9)";
+      c2.lineWidth = 0.8;
+      for (const b of buildings) {
+        c2.beginPath();
+        b.footprint.forEach(([x, y], i) => {
+          const px = (x - minX) / res;
+          const py = cv.height - (y - minY) / res;
+          if (i === 0) c2.moveTo(px, py);
+          else c2.lineTo(px, py);
+        });
+        c2.closePath();
+        c2.fill();
+        c2.stroke();
+      }
+      cv.dataset.minX = String(minX);
+      cv.dataset.minY = String(minY);
+      cv.dataset.maxX = String(maxX);
+      cv.dataset.maxY = String(maxY);
+      this.buildingsCanvas = cv;
+    }
+    const cv = this.buildingsCanvas;
+    const minX = Number(cv.dataset.minX);
+    const minY = Number(cv.dataset.minY);
+    const maxX = Number(cv.dataset.maxX);
+    const maxY = Number(cv.dataset.maxY);
+    this.ctx.drawImage(
+      cv,
+      this.wx(minX),
+      this.wy(maxY),
+      (maxX - minX) * this.scale,
+      (maxY - minY) * this.scale,
+    );
+  }
+
   private fitW = 0;
   private fitH = 0;
 
@@ -199,18 +282,18 @@ export class View2D {
       this.fitH = this.canvas.height;
     }
 
-    // terrain backdrop (world y-up vs canvas y-down: place image by its
-    // top-left corner at world (originX, originY + height*res))
+    // terrain context backdrop (coarse surroundings)
+    if (state.terrainContext && state.showTerrainHeat) {
+      this.drawGridBackdrop(state.terrainContext, 0.5);
+    }
+    // detailed site terrain
     if (state.terrain && state.showTerrainHeat) {
-      this.renderTerrain(state.terrain);
-      const tc = this.terrainCanvas!;
-      ctx.imageSmoothingEnabled = true;
-      const g = state.terrain;
-      const x0 = this.wx(g.originX);
-      const y0 = this.wy(g.originY + g.height * g.resolution);
-      const wpx = g.width * g.resolution * this.scale;
-      const hpx = g.height * g.resolution * this.scale;
-      ctx.drawImage(tc, x0, y0, wpx, hpx);
+      this.drawGridBackdrop(state.terrain, 1);
+    }
+
+    // building footprints
+    if (state.buildings && state.buildings.length > 0) {
+      this.drawBuildings(state.buildings);
     }
 
     this.drawTrack(state, track);
@@ -261,9 +344,7 @@ export class View2D {
   }
 
   // ------------------------------------------------------------ terrain
-  private renderTerrain(grid: TerrainGrid): void {
-    if (this.terrainFor === grid && this.terrainCanvas) return;
-    this.terrainFor = grid;
+  private buildTerrainCanvas(grid: TerrainGrid): HTMLCanvasElement {
     const w = grid.width;
     const h = grid.height;
     const cv = document.createElement("canvas");
@@ -292,7 +373,60 @@ export class View2D {
       }
     }
     ctx.putImageData(img, 0, 0);
-    this.terrainCanvas = cv;
+    // contour lines (marching squares), minor + major
+    const step = range > 400 ? 25 : range > 150 ? 10 : 5;
+    const zBase = Math.ceil(grid.minElevation / step) * step;
+    for (let L = zBase; L <= grid.maxElevation; L += step) {
+      const major = L % (step * 5) === 0;
+      ctx.strokeStyle = major ? "rgba(10,10,10,0.42)" : "rgba(10,10,10,0.2)";
+      ctx.lineWidth = major ? 1.4 : 0.7;
+      ctx.beginPath();
+      this.marchingSquares(ctx, grid, L);
+      ctx.stroke();
+    }
+    return cv;
+  }
+
+  /** Marching-squares contour pass at level L over the terrain grid. */
+  private marchingSquares(ctx: CanvasRenderingContext2D, grid: TerrainGrid, L: number): void {
+    const w = grid.width;
+    const h = grid.height;
+    const z = grid.elevation;
+    for (let j = 0; j < h - 1; j++) {
+      for (let i = 0; i < w - 1; i++) {
+        const z00 = z[j * w + i];
+        const z10 = z[j * w + i + 1];
+        const z01 = z[(j + 1) * w + i];
+        const z11 = z[(j + 1) * w + i + 1];
+        let code = 0;
+        if (z00 >= L) code |= 1;
+        if (z10 >= L) code |= 2;
+        if (z11 >= L) code |= 4;
+        if (z01 >= L) code |= 8;
+        if (code === 0 || code === 15) continue;
+        // canvas coords: row flip (y = h - 1 - j)
+        const x = i;
+        const y = h - 1 - j;
+        const interp = (a: number, b: number) => (a === b ? 0.5 : (L - a) / (b - a));
+        // crossing points on edges: top(z00-z10), right(z10-z11), bottom(z01-z11), left(z00-z01)
+        const pts: [number, number][] = [];
+        if ((code & 3) === 1 || (code & 3) === 2) pts.push([x + interp(z00, z10), y]);
+        if ((code & 6) === 2 || (code & 6) === 4) pts.push([x + 1, y - interp(z10, z11)]);
+        if ((code & 12) === 8 || (code & 12) === 4) pts.push([x + interp(z01, z11), y - 1]);
+        if ((code & 9) === 1 || (code & 9) === 8) pts.push([x, y - interp(z00, z01)]);
+        if (pts.length === 2) {
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          ctx.lineTo(pts[1][0], pts[1][1]);
+        } else if (pts.length === 4) {
+          // saddle: use center value to disambiguate
+          const zc = (z00 + z10 + z01 + z11) / 4;
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          ctx.lineTo(pts[zc >= L ? 1 : 3][0], pts[zc >= L ? 1 : 3][1]);
+          ctx.moveTo(pts[2][0], pts[2][1]);
+          ctx.lineTo(pts[zc >= L ? 3 : 1][0], pts[zc >= L ? 3 : 1][1]);
+        }
+      }
+    }
   }
 
   // -------------------------------------------------------------- track
@@ -300,6 +434,30 @@ export class View2D {
     const ctx = this.ctx;
     const s = track.samples;
     const n = s.length;
+
+    // runoff / shoulder halo beneath the asphalt
+    ctx.beginPath();
+    const haloW = 9; // meters of visual shoulder
+    for (let i = 0; i <= n; i++) {
+      const p = s[i % n];
+      const nx = -Math.sin(p.heading);
+      const ny = Math.cos(p.heading);
+      const hw = p.width / 2 + haloW;
+      const x = this.wx(p.x + nx * hw);
+      const y = this.wy(p.y + ny * hw);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    for (let i = n; i >= 0; i--) {
+      const p = s[i % n];
+      const nx = -Math.sin(p.heading);
+      const ny = Math.cos(p.heading);
+      const hw = p.width / 2 + haloW;
+      ctx.lineTo(this.wx(p.x - nx * hw), this.wy(p.y - ny * hw));
+    }
+    ctx.closePath();
+    ctx.fillStyle = "rgba(160,165,150,0.16)";
+    ctx.fill();
 
     // asphalt band
     ctx.beginPath();

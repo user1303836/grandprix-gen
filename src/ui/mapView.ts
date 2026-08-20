@@ -37,7 +37,7 @@ export class MapView {
   private center: { lat: number; lon: number } | null = null;
   private radiusM = 1800;
   private circleSource = "site-circle";
-  onConfirm: ((sel: SiteSelection, grid: TerrainGrid) => void) | null = null;
+  onConfirm: ((sel: SiteSelection, grid: TerrainGrid, context: TerrainGrid | null) => void) | null = null;
   onBusy: ((msg: string | null, progress: number | null) => void) | null = null;
   onScout: ((sel: SiteSelection) => Promise<ScoutSiteResult[] | null>) | null = null;
   onScoutPick: ((site: ScoutSiteResult) => void) | null = null;
@@ -217,8 +217,16 @@ export class MapView {
       const grid = await fetchMapterhornGrid(frame, this.radiusM, 30, (d, t) => {
         this.onBusy?.(`LOADING TERRAIN ${d}/${t} tiles`, d / t);
       });
+      // coarse surroundings so the site sits in its landscape
+      let context: TerrainGrid | null = null;
+      try {
+        this.onBusy?.("LOADING SURROUNDING TERRAIN", 0.5);
+        context = await fetchMapterhornGrid(frame, this.radiusM * 3.2, 55, undefined);
+      } catch {
+        context = null;
+      }
       this.onBusy?.(null, null);
-      this.onConfirm?.({ lat: this.center.lat, lon: this.center.lon, radiusMeters: this.radiusM }, grid);
+      this.onConfirm?.({ lat: this.center.lat, lon: this.center.lon, radiusMeters: this.radiusM }, grid, context);
     } catch (e) {
       this.onBusy?.(null, null);
       this.statusEl.textContent = `terrain load failed: ${e instanceof Error ? e.message : e}`;

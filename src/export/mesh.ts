@@ -2,6 +2,9 @@
  * Shared 3D mesh builder for the track ribbon (used by the Three.js view
  * and the OBJ/GLB/Blender exports). Banking rotates edge offsets about
  * the local tangent axis.
+ *
+ * Column layout per station (left to right):
+ *   runoff, curb, white line, [asphalt], white line, curb, runoff
  */
 
 import type { Track } from "../core/types";
@@ -26,82 +29,135 @@ export interface MeshPart {
 export interface TrackMeshData {
   positions: Float32Array;
   normals: Float32Array;
+  /** u = distance along lap / 8 m stripe period, v = across the ribbon. */
+  uvs: Float32Array;
   indices: Uint32Array;
   parts: MeshPart[];
 }
 
-interface StripRow {
-  cx: number;
-  cy: number;
-  cz: number;
-  nx: number;
-  ny: number;
-  width: number;
-  bank: number;
+const LINE_WIDTH = 0.32; // white edge line width, meters
+const LINE_INSET = 0.18; // from asphalt edge
+
+/**
+ * Kerb placement mask, derived from the corner data so it recomputes on
+ * every rebuild. Real kerbs only exist where a car would use them:
+ *   inside at/around the apex (clipping), outside through the exit
+ *   (running wide) -- and only at slow/medium corners, not sweepers.
+ */
+function curbMasks(track: Track, nIdx: number[], n: number): { left: boolean[]; right: boolean[] } {
+  const left = new Array<boolean>(track.samples.length).fill(false);
+  const right = new Array<boolean>(track.samples.length).fill(false);
+  const total = track.samples.length;
+  const mark = (arr: boolean[], fromIdx: number, toIdx: number) => {
+    let i = ((fromIdx % total) + total) % total;
+    const end = ((toIdx % total) + total) % total;
+    let guard = 0;
+    while (guard++ <= total) {
+      arr[i] = true;
+      if (i === end) break;
+      i = (i + 1) % total;
+    }
+  };
+  for (const c of track.corners) {
+    if (c.minRadius > 250) continue; // sweepers: no kerb contact
+    const apexI = Math.round(c.sApex / track.ds) % total;
+    const startI = Math.round(c.sStart / track.ds) % total;
+    const endI = Math.round(c.sEnd / track.ds) % total;
+    const runLen = ((endI - startI) % total + total) % total;
+    const apexOff = ((apexI - startI) % total + total) % total;
+    const inside = c.direction === "L" ? left : right;
+    const outside = c.direction === "L" ? right : left;
+    // inside: from 40% before apex to 55% past it
+    mark(
+      inside,
+      (startI + Math.max(0, apexOff - runLen * 0.4)) % total,
+      (startI + Math.min(runLen, apexOff + runLen * 0.55) + Math.round(8 / track.ds)) % total,
+    );
+    // outside: from just before apex through exit + ~14 m
+    mark(
+      outside,
+      (startI + Math.max(0, apexOff - runLen * 0.1)) % total,
+      (endI + Math.round(14 / track.ds)) % total,
+    );
+  }
+  void nIdx;
+  void n;
+  return { left, right };
 }
 
 /**
- * Build the track ribbon mesh: asphalt, curb strips, runoff skirt.
+ * Build the track ribbon mesh: asphalt, edge lines, curb strips, runoff.
  * Closed loop: last row connects back to first.
  */
 export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshData {
   const stride = Math.max(1, opts.stride);
-  const rows: StripRow[] = [];
   const n = track.samples.length;
-  for (let i = 0; i < n; i += stride) {
-    const s = track.samples[i];
-    rows.push({
-      cx: s.x,
-      cy: s.y,
-      cz: s.z,
-      nx: -Math.sin(s.heading),
-      ny: Math.cos(s.heading),
-      width: s.width,
-      bank: s.bank,
-    });
-  }
-  const m = rows.length;
+  const idxList: number[] = [];
+  for (let i = 0; i < n; i += stride) idxList.push(i);
+  const m = idxList.length;
+  const masks = curbMasks(track, idxList, m);
 
-  // vertex columns per row: [runoffL, curbL, edgeL, edgeR, curbR, runoffR]
   const curb = Math.max(0, opts.curbWidth);
   const runoff = Math.max(0, opts.runoffWidth);
-  const cols = 6;
+  // lateral offsets from center (left positive), left to right
+  const cols = 8;
   const positions = new Float32Array(m * cols * 3);
-  const indices: number[] = [];
+  const normals = new Float32Array(m * cols * 3);
+  const uvs = new Float32Array(m * cols * 2);
 
-  for (let i = 0; i < m; i++) {
-    const r = rows[i];
-    const cosB = Math.cos(r.bank);
-    const sinB = Math.sin(r.bank);
-    // lateral offsets from center (left positive)
-    const halfW = r.width / 2;
+  for (let r = 0; r < m; r++) {
+    const si = idxList[r];
+    const s = track.samples[si];
+    const cosB = Math.cos(s.bank);
+    const sinB = Math.sin(s.bank);
+    const halfW = s.width / 2;
+    // where a kerb is absent the curb column collapses onto the edge line
+    // (zero-width strip = invisible) and the runoff band covers the gap
+    const curbL = masks.left[si];
+    const curbR = masks.right[si];
+    const curbOuterL = curbL ? halfW + curb : halfW - LINE_INSET;
+    const curbOuterR = curbR ? -(halfW + curb) : -(halfW - LINE_INSET);
     const offs = [
       halfW + curb + runoff,
-      halfW + curb,
-      halfW,
-      -halfW,
-      -(halfW + curb),
+      curbOuterL,
+      halfW - LINE_INSET,
+      halfW - LINE_INSET - LINE_WIDTH,
+      -(halfW - LINE_INSET - LINE_WIDTH),
+      -(halfW - LINE_INSET),
+      curbOuterR,
       -(halfW + curb + runoff),
     ];
     for (let c = 0; c < cols; c++) {
       const off = offs[c];
-      const lx = r.nx * off * cosB;
-      const ly = r.ny * off * cosB;
+      const lx = -Math.sin(s.heading) * off * cosB;
+      const ly = Math.cos(s.heading) * off * cosB;
       const lz = -off * sinB;
-      // curbs slightly raised, runoff drops slightly
       let extraZ = 0;
-      if (c === 1 || c === 4) extraZ = 0.04;
-      if (c === 0 || c === 5) extraZ = -0.05;
-      const vi = (i * cols + c) * 3;
-      positions[vi] = r.cx + lx;
-      positions[vi + 1] = r.cy + ly;
-      positions[vi + 2] = r.cz + lz + extraZ;
+      if ((c === 1 && curbL) || (c === 6 && curbR)) extraZ = 0.05; // raised kerb
+      if (c === 2 || c === 5) extraZ = 0.015; // lines a hair above asphalt
+      if (c === 0 || c === 7) extraZ = -0.06; // runoff drops away
+      const vi = (r * cols + c) * 3;
+      positions[vi] = s.x + lx;
+      positions[vi + 1] = s.y + ly;
+      positions[vi + 2] = s.z + lz + extraZ;
+      normals[vi] = -sinB * -Math.sin(s.heading);
+      normals[vi + 1] = -sinB * Math.cos(s.heading);
+      normals[vi + 2] = cosB;
+      uvs[(r * cols + c) * 2] = (idxList[r] * track.ds) / 8;
+      uvs[(r * cols + c) * 2 + 1] = c / (cols - 1);
     }
   }
 
-  // parts: asphalt between cols 2..3, curbs 1..2 and 3..4, runoff 0..1 and 4..5
-  const parts: MeshPart[] = [];
-  const bandStart: number[] = [];
+  const partNames = [
+    "runoff_left",
+    "curb_left",
+    "line_left",
+    "asphalt",
+    "line_right",
+    "curb_right",
+    "runoff_right",
+  ];
+  const grouped: number[][] = [[], [], [], [], [], [], []];
   for (let i = 0; i < m; i++) {
     const i2 = (i + 1) % m;
     for (let band = 0; band < cols - 1; band++) {
@@ -109,41 +165,20 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       const b = i * cols + band + 1;
       const c = i2 * cols + band;
       const d = i2 * cols + band + 1;
-      bandStart.push(band);
-      indices.push(a, c, b, b, c, d);
+      grouped[band].push(a, c, b, b, c, d);
     }
-  }
-  // group indices by band type: [runoffL, curbL, asphalt, curbR, runoffR]
-  const partNames = ["runoff_left", "curb_left", "asphalt", "curb_right", "runoff_right"];
-  const grouped: number[][] = [[], [], [], [], []];
-  for (let k = 0; k < indices.length; k += 6) {
-    const band = bandStart[Math.floor(k / 6)]; // 0..4 maps directly to parts
-    for (let t = 0; t < 6; t++) grouped[band].push(indices[k + t]);
   }
   const allIndices: number[] = [];
-  for (let p = 0; p < 5; p++) {
-    const start = allIndices.length;
+  const parts: MeshPart[] = [];
+  for (let p = 0; p < partNames.length; p++) {
+    parts.push({ name: partNames[p], start: allIndices.length, count: grouped[p].length });
     allIndices.push(...grouped[p]);
-    parts.push({ name: partNames[p], start, count: grouped[p].length });
-  }
-
-  // normals: up-ish (banked)
-  const normals = new Float32Array(m * cols * 3);
-  for (let i = 0; i < m; i++) {
-    const r = rows[i];
-    const cosB = Math.cos(r.bank);
-    const sinB = Math.sin(r.bank);
-    for (let c = 0; c < cols; c++) {
-      const vi = (i * cols + c) * 3;
-      normals[vi] = -sinB * r.nx;
-      normals[vi + 1] = -sinB * r.ny;
-      normals[vi + 2] = cosB;
-    }
   }
 
   return {
     positions,
     normals,
+    uvs,
     indices: Uint32Array.from(allIndices),
     parts,
   };

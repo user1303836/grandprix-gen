@@ -22,6 +22,9 @@ export interface SearchOptions extends BuildOptions {
   vehicle?: VehicleSpec;
   candidates?: number;
   keep?: number;
+  /** Extra per-candidate cost (e.g. terrain fit) subtracted from score. */
+  candidateCost?: (track: Track) => number;
+  costWeight?: number;
   onProgress?: (done: number, total: number) => void;
 }
 
@@ -53,7 +56,10 @@ export function searchCandidates(
     if (!r.track) continue;
     const profile = computeSpeedProfile(r.track, vehicle);
     const metrics = computeMetrics(r.track, profile);
-    const score = scoreAgainstRequest(metrics, params);
+    let score = scoreAgainstRequest(metrics, params);
+    if (opts.candidateCost) {
+      score -= (opts.costWeight ?? 6) * opts.candidateCost(r.track);
+    }
     valid.push({
       track: r.track,
       metrics,

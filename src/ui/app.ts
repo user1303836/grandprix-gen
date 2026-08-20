@@ -16,6 +16,7 @@ import { MapView, type SiteSelection } from "./mapView";
 import { EngineClient } from "../engine/client";
 import { gridToData, type AnalysisOut } from "../engine/jobs";
 import { deserializeProject, serializeProject } from "../export/json";
+import { rasterizeBuildingMask } from "../core/osm";
 import { downloadFile, buildTrackPackage } from "../export/package";
 import { trackToSvg } from "../export/svg";
 import { trackToCsv } from "../export/csv";
@@ -42,6 +43,7 @@ export class App {
   private stripEl: HTMLElement | null = null;
   private overlayEl: HTMLElement;
   private graph: ProfileGraph;
+  private sidebarDragging = false;
   private dirty2d = true;
   private morphQueued: TrackParams | null = null;
   private morphInFlight = false;
@@ -81,7 +83,7 @@ export class App {
     this.view3d = new View3D(this.viewportEl);
     this.view3d.resize();
     this.mapView = new MapView(this.viewportEl);
-    this.mapView.onConfirm = (sel, grid) => this.onSiteConfirm(sel, grid);
+    this.mapView.onConfirm = (sel, grid, context) => this.onSiteConfirm(sel, grid, context);
     this.mapView.onBusy = (msg, p) => this.setBusy(msg, p);
     this.mapView.onScout = (sel) => this.runScout(sel);
     this.mapView.onScoutPick = (site) => void this.useScoutedSite(site);
@@ -102,6 +104,32 @@ export class App {
     shell.insertBefore(this.graph.root, this.statusEl);
 
     root.append(shell);
+
+    // track slider drags so state updates don't rebuild the sidebar
+    // underneath the user's pointer
+    document.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (e.target instanceof HTMLInputElement && e.target.type === "range") {
+          this.sidebarDragging = true;
+        }
+      },
+      true,
+    );
+    document.addEventListener(
+      "pointerup",
+      () => {
+        this.sidebarDragging = false;
+      },
+      true,
+    );
+    document.addEventListener(
+      "pointercancel",
+      () => {
+        this.sidebarDragging = false;
+      },
+      true,
+    );
 
     // hover station -> status detail (2D tooltip handles display)
     this.view2d.onStationHover = (s) => {
@@ -142,8 +170,10 @@ export class App {
       if (changed.includes("view")) {
         this.applyViewVisibility();
       }
-      if (changed.includes("params") || changed.includes("terrain") || changed.includes("history") || changed.includes("historyIndex") || changed.includes("vehicleId")) {
-        this.renderSidebar();
+      if (changed.includes("params") || changed.includes("terrain") || changed.includes("history") || changed.includes("historyIndex") || changed.includes("vehicleId") || changed.includes("lockRange")) {
+        // never rebuild mid-drag: replacing the slider DOM breaks the drag
+        // (and collapses sections) while the user is still holding it
+        if (!this.sidebarDragging) this.renderSidebar();
       }
     });
 
@@ -244,6 +274,17 @@ export class App {
     return t ? gridToData(t) : null;
   }
 
+  /** building avoidance payload for generation/search jobs */
+  private avoidData(): { mask: import("../core/osm").BuildingMask; strength: number } | null {
+    const s = this.store.state;
+    if (!s.terrain || !s.buildings || s.buildings.length === 0 || s.avoidBuildings === "off") {
+      return null;
+    }
+    const g = s.terrain;
+    const mask = rasterizeBuildingMask(s.buildings, g.width, g.height, g.resolution, g.originX, g.originY);
+    return { mask, strength: s.avoidBuildings === "hard" ? 1.5 : 0.6 };
+  }
+
   private adoptAnalysis(out: AnalysisOut, label: string): void {
     this.store.set(
       {
@@ -276,6 +317,7 @@ export class App {
           site: s.site,
           terrain: this.terrainData(),
           terrainCandidates: 12,
+          avoidBuildings: this.avoidData(),
         },
         (d, t) => this.setBusy("GENERATING", d / t),
       );
@@ -306,6 +348,7 @@ export class App {
           keep: 6,
           site: s.site,
           terrain: this.terrainData(),
+          avoidBuildings: this.avoidData(),
         },
         (d, t) => this.setBusy(`SEARCHING CANDIDATES ${d}/${t}`, d / t),
       );
@@ -445,11 +488,29 @@ export class App {
     })();
   }
 
-  private onSiteConfirm(sel: SiteSelection, grid: import("../core/terrain").TerrainGrid): void {
+  private onSiteConfirm(
+    sel: SiteSelection,
+    grid: import("../core/terrain").TerrainGrid,
+    context: import("../core/terrain").TerrainGrid | null,
+  ): void {
     const site = { lat: sel.lat, lon: sel.lon, radiusMeters: sel.radiusMeters };
-    this.store.set({ terrain: grid, site }, "terrain", "site");
+    this.store.set({ terrain: grid, terrainContext: context, buildings: null, site }, "terrain", "terrainContext", "buildings", "site");
     this.setView("2d");
     void this.generate();
+    // OSM building context (best-effort, never blocks)
+    void (async () => {
+      try {
+        const { fetchOsmBuildings } = await import("../core/osm");
+        const buildings = await fetchOsmBuildings(grid.frame, sel.radiusMeters * 1.05);
+        if (buildings.length > 0 && this.store.state.terrain === grid) {
+          this.store.set({ buildings }, "buildings");
+          this.dirty2d = true;
+          this.view3d.setState(this.store.state);
+        }
+      } catch {
+        // no buildings is fine
+      }
+    })();
   }
 
   /** Scout a region: load a wide DEM, search it for promising sub-sites. */
@@ -715,7 +776,7 @@ export class App {
       onLockClear: () => this.store.set({ lockRange: null }, "lockRange"),
       onLockRegen: () => this.lockRegen(),
       onClearSite: () => {
-        this.store.set({ terrain: null, site: null }, "terrain", "site");
+        this.store.set({ terrain: null, terrainContext: null, buildings: null, site: null }, "terrain", "site");
         void this.generate();
       },
     });

@@ -8,6 +8,7 @@ import type { SpeedProfile } from "../core/vehicle";
 import type { ValidationReport } from "../core/validate";
 import type { SiteRef, Track, TrackParams } from "../core/types";
 import type { TerrainGrid } from "../core/terrain";
+import type { OsmBuilding } from "../core/osm";
 import type { Candidate } from "../core/search";
 import { defaultParams } from "../core/types";
 
@@ -39,6 +40,12 @@ export interface AppState {
   candidates: Candidate[];
   candidatesSelected: Set<number>;
   terrain: TerrainGrid | null;
+  /** Coarse surrounding-area DEM for context rendering. */
+  terrainContext: TerrainGrid | null;
+  /** OSM building footprints in local metric coords. */
+  buildings: OsmBuilding[] | null;
+  /** building avoidance strength during terrain generation */
+  avoidBuildings: "off" | "soft" | "hard";
   site: SiteRef | null;
   history: HistoryEntry[];
   historyIndex: number;
@@ -73,6 +80,9 @@ export class Store {
       candidates: [],
       candidatesSelected: new Set(),
       terrain: null,
+      terrainContext: null,
+      buildings: null,
+      avoidBuildings: "soft",
       site: null,
       history: [],
       historyIndex: -1,
