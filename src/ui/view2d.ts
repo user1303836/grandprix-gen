@@ -148,7 +148,10 @@ export class View2D {
     }
     const dpr = window.devicePixelRatio || 1;
     const w = this.canvas.width;
-    const h = this.canvas.height;
+    let h = this.canvas.height;
+    // keep the circuit clear of the candidate strip overlay
+    const strip = this.canvas.parentElement?.querySelector(".candidate-strip");
+    if (strip) h -= (strip as HTMLElement).clientHeight * dpr * 0.9;
     const spanX = Math.max(100, maxX - minX);
     const spanY = Math.max(100, maxY - minY);
     this.scale = Math.min(w / (spanX * 1.16), h / (spanY * 1.16));
