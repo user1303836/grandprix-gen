@@ -133,12 +133,12 @@ export interface TerrainProvider {
 
 const MAPTERHORN_URL = "https://tiles.mapterhorn.com/{z}/{x}/{y}.webp";
 
-/** Pick a zoom level whose pixel size is near the target resolution. */
+/** Pick the coarsest zoom whose pixel size is still finer than target. */
 export function pickZoom(lat: number, targetResolution: number): number {
-  for (let z = 15; z >= 8; z--) {
+  for (let z = 8; z <= 15; z++) {
     if (tileResolution(lat, z) <= targetResolution) return z;
   }
-  return 8;
+  return 15;
 }
 
 /**

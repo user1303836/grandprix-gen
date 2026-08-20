@@ -108,6 +108,7 @@ export function runSearch(job: SearchJob): SearchOut {
           site: job.site ?? null,
           terrain: grid.meta(),
           terrainSampler: (x: number, y: number) => grid.elevationAt(x, y),
+          maxFootprintRadius: (Math.min(grid.width, grid.height) * grid.resolution) / 2 * 0.72,
         };
       })()
     : {};
@@ -143,6 +144,7 @@ export function runMorph(job: MorphJob): AnalysisOut | null {
           site: job.track.site,
           terrain: grid.meta(),
           terrainSampler: (x: number, y: number) => grid.elevationAt(x, y),
+          maxFootprintRadius: (Math.min(grid.width, grid.height) * grid.resolution) / 2 * 0.72,
         };
       })()
     : {};
@@ -176,6 +178,7 @@ export function runBreed(job: BreedJob): BreedOut {
         return {
           terrain: grid.meta(),
           terrainSampler: (x: number, y: number) => grid.elevationAt(x, y),
+          maxFootprintRadius: (Math.min(grid.width, grid.height) * grid.resolution) / 2 * 0.72,
         };
       })()
     : {};

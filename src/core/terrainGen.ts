@@ -8,6 +8,7 @@
 
 import { generateValidTrack, type ValidResult } from "./generator";
 import { computeSpeedProfile, VEHICLE_PRESETS } from "./vehicle";
+import { gradeLimit } from "./vertical";
 import type { TerrainGrid } from "./terrain";
 import type { SiteRef, TrackParams } from "./types";
 
@@ -19,8 +20,8 @@ export interface TerrainGenOptions {
 
 /**
  * Cost of a candidate layout against the terrain (lower is better).
- * Rewards: followable ground, requested elevation character, feature
- * alignment. Penalizes: cross-slope, excessive roughness under the line.
+ * Rewards: followable ground, requested elevation character, low
+ * earthwork. Penalizes: cross-slope, roughness, grade infeasibility.
  */
 export function terrainCost(
   xs: Float64Array,
@@ -31,16 +32,20 @@ export function terrainCost(
 ): number {
   const n = xs.length;
   let crossSlopeSum = 0;
-  let roughSum = 0;
   let zMin = Infinity;
   let zMax = -Infinity;
   let valid = 0;
-  let prevZ = NaN;
 
-  for (let i = 0; i < n; i += 2) {
+  // decimate to ~4 m spacing for the ground profile
+  const step = Math.max(1, Math.round(4 / ((xs.length > 0 ? 1 : 1) * 2))); // xs sampled every ~2 m upstream
+  const ground: number[] = [];
+  for (let i = 0; i < n; i += step) {
     const z = grid.elevationAt(xs[i], ys[i]);
     if (Number.isNaN(z)) continue;
     valid++;
+    ground.push(z);
+    if (z < zMin) zMin = z;
+    if (z > zMax) zMax = z;
     // cross slope: slope component perpendicular to travel direction
     const eps = grid.resolution * 1.5;
     const nx = -Math.sin(heading[i]);
@@ -50,33 +55,30 @@ export function terrainCost(
     if (!Number.isNaN(zL) && !Number.isNaN(zR)) {
       crossSlopeSum += Math.abs(zL - zR) / (2 * eps);
     }
-    if (!Number.isNaN(prevZ)) {
-      const zNext = grid.elevationAt(xs[(i + 2) % n], ys[(i + 2) % n]);
-      if (!Number.isNaN(zNext)) {
-        roughSum += Math.abs(zNext - 2 * z + prevZ);
-      }
-    }
-    prevZ = z;
-    if (z < zMin) zMin = z;
-    if (z > zMax) zMax = z;
   }
-  if (valid < n / 4) return 1e9; // mostly off-grid: useless candidate
+  if (valid < n / 8 || ground.length < 8) return 1e9;
 
-  const count = Math.max(1, valid);
-  const crossSlope = crossSlopeSum / count;
-  const rough = roughSum / count;
+  const crossSlope = crossSlopeSum / Math.max(1, valid);
   const relief = zMax - zMin;
 
+  // earthwork estimate: grade-limit the ground profile, measure deviation
+  const gArr = Float64Array.from(ground);
+  const dsEff = 2 * step;
+  const limited = gradeLimit(gArr, dsEff, params.maxGrade, 400);
+  let earthwork = 0;
+  for (let i = 0; i < gArr.length; i++) earthwork += Math.abs(limited[i] - gArr[i]);
+  earthwork /= gArr.length;
+
   // elevation character: want relief to match elevationIntensity
-  const L = n * 2; // rough length proxy (sampled every 2)
+  const L = n * 2;
   const wantRelief = params.elevationIntensity * (L / 1000) * 24;
   const reliefErr = Math.abs(relief - wantRelief) / Math.max(30, wantRelief);
 
   const adherence = params.terrainAdherence;
+  const earthworkWeight = 1.6 - params.earthworkTolerance * 1.3; // low tolerance => strong penalty
   const cost =
-    adherence * (crossSlope * 2.2 + rough * 0.5) +
-    (1 - adherence) * reliefErr * 0.35 +
-    reliefErr * adherence * 0.55;
+    adherence * (crossSlope * 2.0 + earthwork * earthworkWeight * 0.45) +
+    reliefErr * 0.5;
   return cost;
 }
 
@@ -92,10 +94,12 @@ export function generateTerrainTrack(
 ): ValidResult & { terrainCost?: number } {
   const candidates = opts.candidates ?? 8;
   const sampler = (x: number, y: number) => grid.elevationAt(x, y);
+  const halfSpan = (Math.min(grid.width, grid.height) * grid.resolution) / 2;
   const buildOpts = {
     site: opts.site ?? null,
     terrain: grid.meta(),
     terrainSampler: sampler,
+    maxFootprintRadius: halfSpan * 0.72,
   };
 
   let best: (ValidResult & { terrainCost?: number }) | null = null;

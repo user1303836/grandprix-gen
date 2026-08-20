@@ -155,7 +155,8 @@ export class View2D {
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
     this.camX = w / 2 - cx * this.scale;
-    this.camY = h / 2 - cy * this.scale;
+    // north-up: wy(y) = camY - y*scale, so center maps to h/2 with +
+    this.camY = h / 2 + cy * this.scale;
     this.needsFit = false;
     void dpr;
   }

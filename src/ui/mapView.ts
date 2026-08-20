@@ -30,6 +30,11 @@ export class MapView {
 
   constructor(container: HTMLElement) {
     const mapDiv = el("div", { className: "map-container" });
+    // inline styles win against maplibre's own .maplibregl-map rules
+    mapDiv.style.position = "absolute";
+    mapDiv.style.inset = "0";
+    mapDiv.style.width = "100%";
+    mapDiv.style.height = "100%";
     container.appendChild(mapDiv);
 
     this.map = new MLMap({
@@ -70,7 +75,7 @@ export class MapView {
         this.marker.setLngLat(e.lngLat);
       }
       this.updateCircle();
-      this.updatePanel();
+      this.renderPanel();
     });
 
     // panel

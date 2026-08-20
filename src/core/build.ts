@@ -38,6 +38,8 @@ export interface BuildOptions {
   terrain?: TerrainMeta | null;
   /** Ground elevation sampler in local metric coords (site mode). */
   terrainSampler?: ((x: number, y: number) => number) | null;
+  /** Site mode: clamp the horizontal footprint to this radius (meters). */
+  maxFootprintRadius?: number;
 }
 
 export interface BuildResult {
@@ -79,9 +81,20 @@ export function buildTrack(
 
   // 5. normalize to target length
   const coarse = resampleClosed(curve, 1024);
-  const scale = params.targetLength / Math.max(1, coarse.length);
+  let scale = params.targetLength / Math.max(1, coarse.length);
   if (!Number.isFinite(scale) || scale <= 0) {
     return { track: null, closureError: Infinity, failReason: "bad-scale" };
+  }
+  if (opts.maxFootprintRadius && opts.maxFootprintRadius > 0) {
+    // site mode: the footprint must stay inside the surveyed terrain
+    const { cx, cy } = polygonCentroid(curve.x, curve.y);
+    let maxR = 0;
+    for (let i = 0; i < curve.n; i++) {
+      const r = Math.hypot(curve.x[i] - cx, curve.y[i] - cy);
+      if (r > maxR) maxR = r;
+    }
+    const fitScale = (opts.maxFootprintRadius * scale) / Math.max(1e-9, maxR * scale);
+    if (fitScale < 1) scale *= fitScale;
   }
   for (let i = 0; i < curve.n; i++) {
     curve.x[i] *= scale;

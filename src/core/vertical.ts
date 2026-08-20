@@ -10,41 +10,68 @@ import { Rng } from "./prng";
 import { smoothCircular } from "./geometry";
 import type { TrackParams } from "./types";
 
-/** Iteratively clamp dz/ds to maxGrade (preserves overall character). */
-export function gradeLimit(z: Float64Array, ds: number, maxGrade: number, passes = 60): Float64Array {
+/**
+ * Iteratively clamp dz/ds to maxGrade.
+ *
+ * The profile is periodic (closed lap). Slope-limiting an open chain
+ * breaks periodicity at the wrap, so we iterate: limit a duplicated open
+ * chain, then spread the residual seam jump linearly across the lap
+ * (which itself stays within grade budget) until the seam closes.
+ */
+export function gradeLimit(z: Float64Array, ds: number, maxGrade: number, passes = 0): Float64Array {
   const n = z.length;
-  const out = Float64Array.from(z);
   const g = Math.max(0.005, maxGrade);
-  for (let pass = 0; pass < passes; pass++) {
-    let maxViolation = 0;
-    // forward
-    for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      const lim = g * ds;
-      const d = out[j] - out[i];
-      if (d > lim) {
-        out[j] = out[i] + lim;
-        maxViolation = Math.max(maxViolation, d - lim);
-      } else if (d < -lim) {
-        out[j] = out[i] - lim;
-        maxViolation = Math.max(maxViolation, -d - lim);
-      }
-    }
-    // backward
-    for (let i = n - 1; i >= 0; i--) {
-      const j = (i + 1) % n;
-      const lim = g * ds;
-      const d = out[j] - out[i];
-      if (d > lim) {
-        out[i] = out[j] - lim;
-        maxViolation = Math.max(maxViolation, d - lim);
-      } else if (d < -lim) {
-        out[i] = out[j] + lim;
-        maxViolation = Math.max(maxViolation, -d - lim);
-      }
-    }
-    if (maxViolation < 1e-4) break;
+  const maxPasses = passes > 0 ? passes : Math.min(n * 2, 4000);
+  let cur = Float64Array.from(z);
+
+  for (let round = 0; round < 8; round++) {
+    const limited = limitOpenChain(cur, ds, g, maxPasses);
+    // residual seam jump when wrapping limited[n-1] -> limited[0]
+    const jump = limited[0] - limited[n - 1];
+    if (Math.abs(jump) < 0.02) return limited;
+    // spread the jump across the lap (raise the tail toward the head),
+    // then re-limit to absorb the tiny introduced slope
+    const out = Float64Array.from(limited);
+    for (let i = 0; i < n; i++) out[i] += jump * (i / n);
+    cur = out;
   }
+  return cur;
+}
+
+/** Slope-limit an open (non-periodic) duplicated chain, extract the lap. */
+function limitOpenChain(z: Float64Array, ds: number, g: number, maxPasses: number): Float64Array {
+  const n = z.length;
+  const m = n * 2;
+  const chain = new Float64Array(m);
+  for (let i = 0; i < m; i++) chain[i] = z[i % n];
+  const lim = g * ds;
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let maxViolation = 0;
+    for (let i = 0; i < m - 1; i++) {
+      const d = chain[i + 1] - chain[i];
+      if (d > lim) {
+        chain[i + 1] = chain[i] + lim;
+        if (d - lim > maxViolation) maxViolation = d - lim;
+      } else if (d < -lim) {
+        chain[i + 1] = chain[i] - lim;
+        if (-d - lim > maxViolation) maxViolation = -d - lim;
+      }
+    }
+    for (let i = m - 2; i >= 0; i--) {
+      const d = chain[i + 1] - chain[i];
+      if (d > lim) {
+        chain[i] = chain[i + 1] - lim;
+        if (d - lim > maxViolation) maxViolation = d - lim;
+      } else if (d < -lim) {
+        chain[i] = chain[i + 1] + lim;
+        if (-d - lim > maxViolation) maxViolation = -d - lim;
+      }
+    }
+    if (maxViolation < 1e-6) break;
+  }
+  // second copy: every sample was limited with full left context
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) out[i] = chain[n + i];
   return out;
 }
 
@@ -179,12 +206,16 @@ export function designTerrainProfile(
   };
   band(z);
 
-  // Alternate grade limiting and band clamping; finish with a soft grade pass.
-  for (let k = 0; k < 4; k++) {
-    z = gradeLimit(z, ds, params.maxGrade, 20);
-    band(z);
+  // Projected relaxation: repeatedly pull toward the band-clamped ground,
+  // then project back onto the grade-feasible set. Converges to a profile
+  // that hugs the ground where grades allow and does earthworks only
+  // where the land is steeper than the road may be.
+  const target = Float64Array.from(z);
+  band(target);
+  for (let round = 0; round < 24; round++) {
+    for (let i = 0; i < n; i++) z[i] += 0.3 * (target[i] - z[i]);
+    z = gradeLimit(z, ds, params.maxGrade);
   }
-  z = gradeLimit(z, ds, params.maxGrade * 1.15, 40);
 
   const cutFill = new Float64Array(n);
   for (let i = 0; i < n; i++) cutFill[i] = z[i] - existingZ[i];

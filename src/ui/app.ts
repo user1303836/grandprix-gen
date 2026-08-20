@@ -254,7 +254,7 @@ export class App {
           vehicleId: s.vehicleId,
           site: s.site,
           terrain: this.terrainData(),
-          terrainCandidates: 8,
+          terrainCandidates: 12,
         },
         (d, t) => this.setBusy("GENERATING", d / t),
       );

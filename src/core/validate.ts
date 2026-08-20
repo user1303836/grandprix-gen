@@ -37,9 +37,10 @@ export function validateTrack(track: Track, params: TrackParams): ValidationRepo
   }
   if (!finite) issues.push("non-finite geometry");
 
-  // length
+  // length (terrain sites may clamp the footprint, so be lenient there)
   const lengthError = Math.abs(track.length - params.targetLength) / params.targetLength;
-  if (lengthError > 0.03) issues.push(`length off by ${(lengthError * 100).toFixed(1)}%`);
+  const lenTol = track.terrain ? 0.3 : 0.03;
+  if (lengthError > lenTol) issues.push(`length off by ${(lengthError * 100).toFixed(1)}%`);
 
   // curvature
   const kappaArr = new Float64Array(n);
