@@ -69,6 +69,12 @@ export interface TrackParams {
   /** Morphable: track width in meters. */
   width: number;
 
+  // --- identity (latent causes of local variation) --------------------------
+  /** 0 = brand-new modern facility, 1 = weathered heritage circuit. */
+  heritage: number;
+  /** How many distinctive named places the lap develops. */
+  featureRichness: number;
+
   // --- terrain (site mode) ---------------------------------------------------
   /** How strongly the route follows natural terrain features. */
   terrainAdherence: number;
@@ -112,6 +118,9 @@ export function defaultParams(): TrackParams {
     offCamber: 0.15,
     width: 12,
 
+    heritage: 0.45,
+    featureRichness: 0.65,
+
     terrainAdherence: 0.5,
     earthworkTolerance: 0.4,
     maxCut: 18,
@@ -141,6 +150,8 @@ export const MORPHABLE_PARAMS: ReadonlySet<keyof TrackParams> = new Set([
   "banking",
   "offCamber",
   "width",
+  "heritage",
+  "featureRichness",
   "terrainAdherence",
   "earthworkTolerance",
   "maxCut",
@@ -262,6 +273,34 @@ export interface TrackDNA {
 }
 
 // ---------------------------------------------------------------------------
+// Spatial property profiles (per-sample heterogeneity)
+// ---------------------------------------------------------------------------
+
+/**
+ * Physical properties that vary along s. Typed arrays aligned to
+ * track.samples. Everything the renderer/exporters/vehicle need to make a
+ * lap feel like a place with history rather than a homogeneous ribbon.
+ */
+export interface PropertyProfiles {
+  widthL: Float32Array; // half-width to the left of centerline, meters
+  widthR: Float32Array; // half-width to the right
+  surface: Uint8Array; // SurfaceKind
+  roughness: Float32Array; // 0..1
+  grip: Float32Array; // multiplier on tire grip (~0.9..1.08)
+  crossfall: Float32Array; // crown/drainage slope, radians (separate from banking)
+  kerbL: Uint8Array; // KerbKind
+  kerbR: Uint8Array;
+  runoffL: Uint8Array; // RunoffKind
+  runoffR: Uint8Array;
+  runoffWidthL: Float32Array; // meters of runoff beyond the kerb
+  runoffWidthR: Float32Array;
+  barrierDistL: Float32Array; // meters from runoff edge to barrier (Inf = none)
+  barrierDistR: Float32Array;
+  /** feature index active at this sample (-1 = none), into track.features */
+  featureIdx: Int16Array;
+}
+
+// ---------------------------------------------------------------------------
 // Site / terrain
 // ---------------------------------------------------------------------------
 
@@ -284,6 +323,8 @@ export interface TerrainMeta {
   maxElevation: number;
 }
 
+import type { CircuitIdentity, TrackFeature } from "./character";
+
 // ---------------------------------------------------------------------------
 // Track
 // ---------------------------------------------------------------------------
@@ -304,6 +345,12 @@ export interface Track {
   sectors: Sector[];
   site: SiteRef | null;
   terrain: TerrainMeta | null;
+  /** Latent circuit identity (era, styles, baselines). */
+  identity: CircuitIdentity;
+  /** Localized coherent features (the memorable places). */
+  features: TrackFeature[];
+  /** Per-sample physical property profiles. */
+  props: PropertyProfiles;
 }
 
 // ---------------------------------------------------------------------------

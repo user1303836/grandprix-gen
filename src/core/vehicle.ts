@@ -109,14 +109,18 @@ export function computeSpeedProfile(track: Track, spec: VehicleSpec): SpeedProfi
   for (let i = 0; i < n; i++) {
     const s = track.samples[i];
     const k = Math.abs(s.kappa);
+    // spatial heterogeneity: grip + roughness vary around the lap
+    const gripMul = track.props?.grip[i] ?? 1;
+    const rough = track.props?.roughness[i] ?? 0;
+    const vTopLocal = spec.vTop * (1 - rough * 0.07);
     if (k < 1e-5) {
-      vLim[i] = spec.vTop;
+      vLim[i] = vTopLocal;
     } else {
       // iterate once: vLim depends on downforce which depends on v
-      let vv = Math.sqrt(spec.aLat / k);
-      const cap = latCap(spec, vv, s.bank);
+      let vv = Math.sqrt((spec.aLat * gripMul) / k);
+      const cap = latCap(spec, vv, s.bank) * gripMul;
       vv = Math.sqrt(cap / k);
-      vLim[i] = Math.min(spec.vTop, vv);
+      vLim[i] = Math.min(vTopLocal, vv);
     }
   }
 
@@ -134,9 +138,10 @@ export function computeSpeedProfile(track: Track, spec: VehicleSpec): SpeedProfi
   for (let pass = 0; pass < 3; pass++) {
     for (let i = 0; i < n; i++) {
       const j = (i + 1) % n;
+      const rough = track.props?.roughness[i] ?? 0;
       const accel = Math.max(
         0.6,
-        spec.aAccel * (1 - v[i] / spec.vTop) - G * grade[i] * 0.85,
+        spec.aAccel * (1 - v[i] / spec.vTop) * (1 - rough * 0.1) - G * grade[i] * 0.85,
       );
       const reach = Math.sqrt(v[i] * v[i] + 2 * accel * ds);
       if (v[j] > reach) v[j] = reach;
@@ -145,7 +150,8 @@ export function computeSpeedProfile(track: Track, spec: VehicleSpec): SpeedProfi
   for (let pass = 0; pass < 3; pass++) {
     for (let i = n - 1; i >= 0; i--) {
       const j = (i + 1) % n;
-      const decel = spec.aBrake + G * Math.max(-0.02, grade[i]) * 0.5;
+      const gripMul = track.props?.grip[i] ?? 1;
+      const decel = spec.aBrake * (0.88 + 0.12 * gripMul) + G * Math.max(-0.02, grade[i]) * 0.5;
       const allowed = Math.sqrt(v[j] * v[j] + 2 * decel * ds);
       if (v[i] > allowed) v[i] = allowed;
     }

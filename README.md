@@ -64,6 +64,22 @@ Everything is browser-local. No backend. Terrain DEM comes from
 
 Keyboard: `g` generate · `1/2/3` views · `⌘Z` undo.
 
+### Heterogeneous circuit model
+
+The ribbon is not homogeneous. Every generated circuit rolls a latent
+**identity** (era: classic/hybrid/modern, roughness + width-variation
+baselines, runoff/kerb/barrier styles, terrain coupling, naming flavor) and a
+set of **localized features** anchored to the structural DNA: banked concrete
+bowls (karussell), blind/jump crests, compressions, resurfaced zones, legacy
+narrows, wall runs, mixed-surface patches, widened braking zones. Features
+alter several properties *simultaneously* -- geometry (banking, width, vertical
+profile), surface, roughness, grip, kerbs, runoff, barriers -- and get
+generated **place names**, so a lap develops recognizable places instead of
+uniform procedural road. Physical properties vary per sample along s:
+asymmetric widths, surface kind, roughness, grip, crossfall, kerb kind, runoff
+kind + width, barrier distance. The vehicle model reads grip/roughness per
+sample; the same circuit laps differently as its surface changes.
+
 ## Architecture
 
 ```

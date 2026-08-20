@@ -46,6 +46,10 @@ export function buildStatusBar(state: AppState): HTMLElement {
   bar.append(cell("BRAKE ZONES", `${m.brakingZoneCount} (${m.heavyBrakingZones} hard)`));
   bar.append(cell("Δ ELEV", `${m.elevationRange.toFixed(0)} m`));
   bar.append(cell("MAX GRADE", `${m.maxGradePct.toFixed(1)}%`));
+  bar.append(cell("ERA", m.era));
+  bar.append(cell("PLACES", `${m.featureCount}`));
+  bar.append(cell("SURF DIV", m.surfaceDiversity.toFixed(0)));
+  bar.append(cell("WIDTH Δ", `±${(m.widthRange / 2).toFixed(1)} m`));
   if (m.meanAbsCutFill > 0.01) {
     bar.append(cell("EARTHWORK", `${m.meanAbsCutFill.toFixed(1)} m avg`));
     bar.append(cell("CUT/FILL", `${m.maxCut.toFixed(0)}/${m.maxFill.toFixed(0)} m`));

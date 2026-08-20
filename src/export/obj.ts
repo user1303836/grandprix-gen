@@ -1,54 +1,62 @@
 /**
- * OBJ export: generic mesh interchange. Objects split by part
- * (asphalt / curbs / runoff / terrain) with groups + materials.
+ * OBJ export: generic mesh interchange. Objects split by part+kind
+ * (asphalt surface types / kerb kinds / runoff kinds / barriers / terrain).
  */
 
-import { buildGridMesh, buildTrackMesh } from "./mesh";
+import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
 import { carveSampler, type TerrainGrid } from "../core/terrain";
 import type { Track } from "../core/types";
 
 export interface ObjOptions {
   terrain?: TerrainGrid | null;
-  terrainExtent?: number; // meters of terrain around track bbox
+  terrainExtent?: number;
 }
 
 export function trackToObj(track: Track, opts: ObjOptions = {}): string {
   const out: string[] = [];
   out.push("# grandprix-gen track export");
-  out.push(`# seed ${track.seed} length ${(track.length / 1000).toFixed(3)} km`);
+  out.push(`# seed ${track.seed} length ${(track.length / 1000).toFixed(3)} km era ${track.identity?.era}`);
   out.push("mtllib track.mtl");
 
-  const mesh = buildTrackMesh(track, { curbWidth: 1.2, runoffWidth: 6, stride: 1 });
+  const mesh = buildTrackMesh(track, { curbWidth: 1.3, runoffWidth: 9, stride: 1 });
   let vOffset = 1; // OBJ is 1-indexed
 
-  for (const part of mesh.parts) {
-    if (part.count === 0) continue;
-    out.push(`o ${part.name}`);
-    out.push(`usemtl ${part.name}`);
-    // write only vertices used by this part
+  const emitPart = (name: string, positions: Float32Array, indices: Uint32Array, start: number, count: number) => {
+    out.push(`o ${name.replace(/[^a-zA-Z0-9_]/g, "_")}`);
+    out.push(`usemtl ${name.replace(/[^a-zA-Z0-9_]/g, "_")}`);
     const used = new Set<number>();
-    for (let i = part.start; i < part.start + part.count; i++) used.add(mesh.indices[i]);
+    for (let i = start; i < start + count; i++) used.add(indices[i]);
     const remap = new Map<number, number>();
     const verts = [...used].sort((a, b) => a - b);
     for (const v of verts) {
-      const px = mesh.positions[v * 3];
-      const py = mesh.positions[v * 3 + 1];
-      const pz = mesh.positions[v * 3 + 2];
-      out.push(`v ${px.toFixed(4)} ${pz.toFixed(4)} ${(-py).toFixed(4)}`); // y-up conversion
+      const px = positions[v * 3];
+      const py = positions[v * 3 + 1];
+      const pz = positions[v * 3 + 2];
+      out.push(`v ${px.toFixed(4)} ${pz.toFixed(4)} ${(-py).toFixed(4)}`); // y-up
       remap.set(v, vOffset++);
     }
     for (const v of verts) {
-      const nx = mesh.normals[v * 3];
-      const ny = mesh.normals[v * 3 + 1];
-      const nz = mesh.normals[v * 3 + 2];
-      out.push(`vn ${nx.toFixed(4)} ${nz.toFixed(4)} ${(-ny).toFixed(4)}`);
+      void v;
+      out.push(`vn 0 1 0`);
     }
-    for (let i = part.start; i < part.start + part.count; i += 3) {
-      const a = remap.get(mesh.indices[i])!;
-      const b = remap.get(mesh.indices[i + 1])!;
-      const c = remap.get(mesh.indices[i + 2])!;
+    for (let i = start; i < start + count; i += 3) {
+      const a = remap.get(indices[i])!;
+      const b = remap.get(indices[i + 1])!;
+      const c = remap.get(indices[i + 2])!;
       out.push(`f ${a}//${a} ${b}//${b} ${c}//${c}`);
     }
+  };
+
+  for (const part of mesh.parts) {
+    if (part.count === 0) continue;
+    emitPart(part.name, mesh.positions, mesh.indices, part.start, part.count);
+  }
+
+  // barriers
+  const barriers = buildBarrierMeshes(track);
+  for (const [side, bm] of [["left", barriers.left], ["right", barriers.right]] as const) {
+    if (!bm) continue;
+    emitPart(`barrier_${side}`, bm.positions, bm.indices, 0, bm.indices.length);
   }
 
   if (opts.terrain) {
@@ -85,21 +93,40 @@ export function trackToObj(track: Track, opts: ObjOptions = {}): string {
   return out.join("\n") + "\n";
 }
 
+const SURF_MTL: Record<string, string> = {
+  modern: "Kd 0.20 0.20 0.21",
+  aged: "Kd 0.27 0.27 0.26",
+  concrete: "Kd 0.58 0.57 0.54",
+  patched: "Kd 0.24 0.24 0.23",
+};
+
 export function trackMtl(): string {
-  return `# grandprix-gen materials
-newmtl asphalt
-Kd 0.13 0.13 0.14
-Ka 0.05 0.05 0.05
-Ks 0.05 0.05 0.05
-newmtl curb_left
-Kd 0.75 0.12 0.12
-newmtl curb_right
-Kd 0.85 0.85 0.85
-newmtl runoff_left
-Kd 0.55 0.55 0.5
-newmtl runoff_right
-Kd 0.55 0.55 0.5
-newmtl terrain
-Kd 0.22 0.35 0.18
-`;
+  const lines: string[] = ["# grandprix-gen materials"];
+  for (const [k, v] of Object.entries(SURF_MTL)) {
+    lines.push(`newmtl asphalt_${k}`);
+    lines.push(v);
+    lines.push("Ka 0.05 0.05 0.05");
+    lines.push("Ks 0.04 0.04 0.04");
+  }
+  lines.push(
+    `newmtl line_default\nKd 0.95 0.95 0.95`,
+    `newmtl kerb_left_flat\nKd 0.85 0.83 0.80`,
+    `newmtl kerb_right_flat\nKd 0.85 0.83 0.80`,
+    `newmtl kerb_left_standard\nKd 0.76 0.23 0.18`,
+    `newmtl kerb_right_standard\nKd 0.76 0.23 0.18`,
+    `newmtl kerb_left_aggressive\nKd 0.83 0.33 0.0`,
+    `newmtl kerb_right_aggressive\nKd 0.83 0.33 0.0`,
+    `newmtl runoff_left_grass\nKd 0.26 0.35 0.18`,
+    `newmtl runoff_right_grass\nKd 0.26 0.35 0.18`,
+    `newmtl runoff_left_gravel\nKd 0.61 0.56 0.45`,
+    `newmtl runoff_right_gravel\nKd 0.61 0.56 0.45`,
+    `newmtl runoff_left_asphalt\nKd 0.33 0.33 0.35`,
+    `newmtl runoff_right_asphalt\nKd 0.33 0.33 0.35`,
+    `newmtl runoff_left_wall\nKd 0.53 0.51 0.48`,
+    `newmtl runoff_right_wall\nKd 0.53 0.51 0.48`,
+    `newmtl barrier_left\nKd 0.47 0.50 0.48`,
+    `newmtl barrier_right\nKd 0.47 0.50 0.48`,
+    `newmtl terrain\nKd 0.18 0.29 0.13`,
+  );
+  return lines.join("\n") + "\n";
 }

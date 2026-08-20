@@ -1,20 +1,21 @@
 /**
  * Shared 3D mesh builder for the track ribbon (used by the Three.js view
- * and the OBJ/GLB/Blender exports). Banking rotates edge offsets about
- * the local tangent axis.
+ * and the OBJ/GLB/Blender exports).
+ *
+ * The ribbon is heterogeneous: asymmetric half-widths, per-sample surface
+ * / kerb / runoff kinds, and barrier walls. Parts are bucketed by
+ * (band, kind) so the renderer can assign real materials per run.
  *
  * Column layout per station (left to right):
- *   runoff, curb, white line, [asphalt], white line, curb, runoff
+ *   runoff, kerb, white line, [asphalt], white line, kerb, runoff
  */
 
+import { KerbKind, RunoffKind, SurfaceKind } from "../core/character";
 import type { Track } from "../core/types";
 
 export interface TrackMeshOptions {
-  /** Curb strip width beyond the asphalt edge, meters (0 = none). */
-  curbWidth: number;
-  /** Runoff skirt width beyond curbs, meters (0 = none). */
+  curbWidth: number; // legacy fallback when no props
   runoffWidth: number;
-  /** Sample stride (1 = every sample). */
   stride: number;
 }
 
@@ -31,111 +32,112 @@ export interface TrackMeshData {
   normals: Float32Array;
   /** u = distance along lap / 8 m stripe period, v = across the ribbon. */
   uvs: Float32Array;
+  /** per-vertex color tint (surface mottling etc.) */
+  colors: Float32Array;
   indices: Uint32Array;
   parts: MeshPart[];
 }
 
-const LINE_WIDTH = 0.32; // white edge line width, meters
-const LINE_INSET = 0.18; // from asphalt edge
+const LINE_WIDTH = 0.32;
+const LINE_INSET = 0.18;
 
-/**
- * Kerb placement mask, derived from the corner data so it recomputes on
- * every rebuild. Real kerbs only exist where a car would use them:
- *   inside at/around the apex (clipping), outside through the exit
- *   (running wide) -- and only at slow/medium corners, not sweepers.
- */
-function curbMasks(track: Track, nIdx: number[], n: number): { left: boolean[]; right: boolean[] } {
-  const left = new Array<boolean>(track.samples.length).fill(false);
-  const right = new Array<boolean>(track.samples.length).fill(false);
-  const total = track.samples.length;
-  const mark = (arr: boolean[], fromIdx: number, toIdx: number) => {
-    let i = ((fromIdx % total) + total) % total;
-    const end = ((toIdx % total) + total) % total;
-    let guard = 0;
-    while (guard++ <= total) {
-      arr[i] = true;
-      if (i === end) break;
-      i = (i + 1) % total;
-    }
-  };
-  for (const c of track.corners) {
-    if (c.minRadius > 250) continue; // sweepers: no kerb contact
-    const apexI = Math.round(c.sApex / track.ds) % total;
-    const startI = Math.round(c.sStart / track.ds) % total;
-    const endI = Math.round(c.sEnd / track.ds) % total;
-    const runLen = ((endI - startI) % total + total) % total;
-    const apexOff = ((apexI - startI) % total + total) % total;
-    const inside = c.direction === "L" ? left : right;
-    const outside = c.direction === "L" ? right : left;
-    // inside: from 40% before apex to 55% past it
-    mark(
-      inside,
-      (startI + Math.max(0, apexOff - runLen * 0.4)) % total,
-      (startI + Math.min(runLen, apexOff + runLen * 0.55) + Math.round(8 / track.ds)) % total,
-    );
-    // outside: from just before apex through exit + ~14 m
-    mark(
-      outside,
-      (startI + Math.max(0, apexOff - runLen * 0.1)) % total,
-      (endI + Math.round(14 / track.ds)) % total,
-    );
-  }
-  void nIdx;
-  void n;
-  return { left, right };
-}
+const KERB_WIDTH: Record<number, number> = {
+  [KerbKind.None]: 0,
+  [KerbKind.FlatPainted]: 0.7,
+  [KerbKind.Standard]: 1.3,
+  [KerbKind.Aggressive]: 1.7,
+};
+const KERB_LIFT: Record<number, number> = {
+  [KerbKind.None]: 0,
+  [KerbKind.FlatPainted]: 0.006,
+  [KerbKind.Standard]: 0.05,
+  [KerbKind.Aggressive]: 0.13,
+};
 
-/**
- * Build the track ribbon mesh: asphalt, edge lines, curb strips, runoff.
- * Closed loop: last row connects back to first.
- */
+/** Base tint per surface kind (multiplied into material color). */
+export const SURFACE_TINT: Record<number, [number, number, number]> = {
+  [SurfaceKind.ModernAsphalt]: [1.0, 1.0, 1.0],
+  [SurfaceKind.AgedAsphalt]: [1.22, 1.2, 1.16], // faded = lighter
+  [SurfaceKind.Concrete]: [1.85, 1.82, 1.72],
+  [SurfaceKind.PatchedMix]: [0.92, 0.92, 0.9],
+};
+
 export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshData {
   const stride = Math.max(1, opts.stride);
   const n = track.samples.length;
   const idxList: number[] = [];
   for (let i = 0; i < n; i += stride) idxList.push(i);
   const m = idxList.length;
-  const masks = curbMasks(track, idxList, m);
 
-  const curb = Math.max(0, opts.curbWidth);
-  const runoff = Math.max(0, opts.runoffWidth);
-  // lateral offsets from center (left positive), left to right
+  const props = track.props;
+  const curbFallback = Math.max(0, opts.curbWidth);
+  const runoffFallback = Math.max(0, opts.runoffWidth);
+
   const cols = 8;
   const positions = new Float32Array(m * cols * 3);
   const normals = new Float32Array(m * cols * 3);
   const uvs = new Float32Array(m * cols * 2);
+  const colors = new Float32Array(m * cols * 3);
+  // kind key per station per band: [kerbL, line, asphalt, runoff, kerbR...]
+  const kerbAt = (i: number, side: "L" | "R"): number =>
+    props ? (side === "L" ? props.kerbL[i] : props.kerbR[i]) : KerbKind.Standard;
+  const runoffAt = (i: number, side: "L" | "R"): number =>
+    props ? (side === "L" ? props.runoffL[i] : props.runoffR[i]) : RunoffKind.Grass;
+  const surfaceAt = (i: number): number => (props ? props.surface[i] : SurfaceKind.ModernAsphalt);
+  const roughAt = (i: number): number => (props ? props.roughness[i] : 0.2);
+  const halfL = (i: number) => (props ? props.widthL[i] : track.samples[i].width / 2);
+  const halfR = (i: number) => (props ? props.widthR[i] : track.samples[i].width / 2);
+  const runoffWL = (i: number) => (props ? props.runoffWidthL[i] : runoffFallback);
+  const runoffWR = (i: number) => (props ? props.runoffWidthR[i] : runoffFallback);
+
+  // seeded mottle for pavement texture (deterministic per track)
+  const mottle = (i: number, rough: number): number => {
+    const v = Math.sin(i * 12.9898 + track.seed * 0.078) * 43758.5453;
+    const f = v - Math.floor(v);
+    return 1 + (f - 0.5) * (0.08 + rough * 0.22);
+  };
 
   for (let r = 0; r < m; r++) {
     const si = idxList[r];
     const s = track.samples[si];
     const cosB = Math.cos(s.bank);
     const sinB = Math.sin(s.bank);
-    const halfW = s.width / 2;
-    // where a kerb is absent the curb column collapses onto the edge line
-    // (zero-width strip = invisible) and the runoff band covers the gap
-    const curbL = masks.left[si];
-    const curbR = masks.right[si];
-    const curbOuterL = curbL ? halfW + curb : halfW - LINE_INSET;
-    const curbOuterR = curbR ? -(halfW + curb) : -(halfW - LINE_INSET);
+    const kL = kerbAt(si, "L");
+    const kR = kerbAt(si, "R");
+    const kerbWL = KERB_WIDTH[kL] || curbFallback;
+    const kerbWR = KERB_WIDTH[kR] || curbFallback;
+    const wL = halfL(si);
+    const wR = halfR(si);
+    const roL = runoffWL(si);
+    const roR = runoffWR(si);
+    // wall runoff: the strip narrows to a concrete pad
+    const roEffL = runoffAt(si, "L") === RunoffKind.Wall ? Math.min(roL, 2.5) : roL;
+    const roEffR = runoffAt(si, "R") === RunoffKind.Wall ? Math.min(roR, 2.5) : roR;
+    // absent kerb: kerb column collapses onto the edge line (zero-width)
+    const kerbOuterL = kL === KerbKind.None ? wL - LINE_INSET : wL + kerbWL;
+    const kerbOuterR = kR === KerbKind.None ? -(wR - LINE_INSET) : -(wR + kerbWR);
     const offs = [
-      halfW + curb + runoff,
-      curbOuterL,
-      halfW - LINE_INSET,
-      halfW - LINE_INSET - LINE_WIDTH,
-      -(halfW - LINE_INSET - LINE_WIDTH),
-      -(halfW - LINE_INSET),
-      curbOuterR,
-      -(halfW + curb + runoff),
+      wL + kerbWL + roEffL,
+      kerbOuterL,
+      wL - LINE_INSET,
+      wL - LINE_INSET - LINE_WIDTH,
+      -(wR - LINE_INSET - LINE_WIDTH),
+      -(wR - LINE_INSET),
+      kerbOuterR,
+      -(wR + kerbWR + roEffR),
     ];
+    const tint = SURFACE_TINT[surfaceAt(si)] ?? [1, 1, 1];
+    const mot = mottle(si, roughAt(si));
     for (let c = 0; c < cols; c++) {
       const off = offs[c];
       const lx = -Math.sin(s.heading) * off * cosB;
       const ly = Math.cos(s.heading) * off * cosB;
       const lz = -off * sinB;
       let extraZ = 0;
-      if ((c === 1 && curbL) || (c === 6 && curbR)) extraZ = 0.05; // raised kerb
-      if (c === 2 || c === 5) extraZ = 0.015; // lines a hair above asphalt
-      if (c === 0 || c === 7) extraZ = -0.06; // runoff drops away
+      if (c === 1) extraZ = KERB_LIFT[kL] ?? 0;
+      if (c === 6) extraZ = KERB_LIFT[kR] ?? 0;
+      if (c === 2 || c === 5) extraZ = 0.015;
+      if (c === 0 || c === 7) extraZ = -0.05;
       const vi = (r * cols + c) * 3;
       positions[vi] = s.x + lx;
       positions[vi + 1] = s.y + ly;
@@ -143,45 +145,150 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       normals[vi] = -sinB * -Math.sin(s.heading);
       normals[vi + 1] = -sinB * Math.cos(s.heading);
       normals[vi + 2] = cosB;
-      uvs[(r * cols + c) * 2] = (idxList[r] * track.ds) / 8;
+      uvs[(r * cols + c) * 2] = (si * track.ds) / 8;
       uvs[(r * cols + c) * 2 + 1] = c / (cols - 1);
+      // colors: asphalt band carries surface tint + mottle
+      const ci = (r * cols + c) * 3;
+      if (c === 3 || c === 4) {
+        colors[ci] = tint[0] * mot;
+        colors[ci + 1] = tint[1] * mot;
+        colors[ci + 2] = tint[2] * mot;
+      } else {
+        colors[ci] = 1;
+        colors[ci + 1] = 1;
+        colors[ci + 2] = 1;
+      }
     }
   }
 
-  const partNames = [
-    "runoff_left",
-    "curb_left",
-    "line_left",
-    "asphalt",
-    "line_right",
-    "curb_right",
-    "runoff_right",
-  ];
-  const grouped: number[][] = [[], [], [], [], [], [], []];
+  // bucket quads by (band, kind) so the renderer assigns real materials
+  const bandNames = ["runoff", "kerb", "line", "asphalt", "line", "kerb", "runoff"];
+  const bandSides = ["left", "left", "left", "", "right", "right", "right"];
+  const kindOf = (band: number, si: number): number => {
+    switch (bandNames[band]) {
+      case "kerb":
+        return kerbAt(si, bandSides[band] === "left" ? "L" : "R");
+      case "runoff":
+        return runoffAt(si, bandSides[band] === "left" ? "L" : "R");
+      case "asphalt":
+        return surfaceAt(si);
+      default:
+        return 0;
+    }
+  };
+  const kindNames: Record<string, Record<number, string>> = {
+    kerb: { 0: "none", 1: "flat", 2: "standard", 3: "aggressive" },
+    runoff: { 0: "grass", 1: "gravel", 2: "asphalt", 3: "wall" },
+    asphalt: { 0: "modern", 1: "aged", 2: "concrete", 3: "patched" },
+  };
+
+  const buckets = new Map<string, number[]>();
   for (let i = 0; i < m; i++) {
     const i2 = (i + 1) % m;
+    const si = idxList[i];
     for (let band = 0; band < cols - 1; band++) {
+      const bandName = bandNames[band];
+      if (bandName === "kerb" && kindOf(band, si) === KerbKind.None) continue; // absent
+      const kindLabel = kindNames[bandName]?.[kindOf(band, si)] ?? "default";
+      const side = bandSides[band];
+      const key = side ? `${bandName}_${side}:${kindLabel}` : `${bandName}:${kindLabel}`;
+      let bucket = buckets.get(key);
+      if (!bucket) buckets.set(key, (bucket = []));
       const a = i * cols + band;
       const b = i * cols + band + 1;
       const c = i2 * cols + band;
       const d = i2 * cols + band + 1;
-      grouped[band].push(a, c, b, b, c, d);
+      bucket.push(a, c, b, b, c, d);
     }
   }
+  // deterministic part order
   const allIndices: number[] = [];
   const parts: MeshPart[] = [];
-  for (let p = 0; p < partNames.length; p++) {
-    parts.push({ name: partNames[p], start: allIndices.length, count: grouped[p].length });
-    allIndices.push(...grouped[p]);
+  for (const key of [...buckets.keys()].sort()) {
+    const bucket = buckets.get(key)!;
+    parts.push({ name: key, start: allIndices.length, count: bucket.length });
+    allIndices.push(...bucket);
   }
 
   return {
     positions,
     normals,
     uvs,
+    colors,
     indices: Uint32Array.from(allIndices),
     parts,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Barrier walls
+// ---------------------------------------------------------------------------
+
+export interface SimpleMesh {
+  positions: Float32Array;
+  indices: Uint32Array;
+}
+
+/**
+ * Vertical barrier ribbons where barriers stand close (armco / walls).
+ * Returns left/right meshes (null when no barrier on that side).
+ */
+export function buildBarrierMeshes(track: Track): { left: SimpleMesh | null; right: SimpleMesh | null } {
+  const props = track.props;
+  if (!props) return { left: null, right: null };
+  return {
+    left: buildBarrierSide(track, "left"),
+    right: buildBarrierSide(track, "right"),
+  };
+}
+
+function buildBarrierSide(track: Track, side: "left" | "right"): SimpleMesh | null {
+  const props = track.props!;
+  const n = track.samples.length;
+  const dist = side === "left" ? props.barrierDistL : props.barrierDistR;
+  const runoffW = side === "left" ? props.runoffWidthL : props.runoffWidthR;
+  const halfW = side === "left" ? props.widthL : props.widthR;
+  const isWall = side === "left" ? props.runoffL : props.runoffR;
+
+  const verts: number[] = [];
+  const indices: number[] = [];
+  let runActive = false;
+  const H = 1.0;
+
+  const offsetAt = (i: number): number => {
+    const sign = side === "left" ? 1 : -1;
+    if (isWall[i] === RunoffKind.Wall) return sign * (halfW[i] + 2.6);
+    return sign * (halfW[i] + 1.4 + runoffW[i] + dist[i]);
+  };
+
+  for (let i = 0; i <= n; i++) {
+    const si = i % n;
+    const wall = isWall[si] === RunoffKind.Wall;
+    const active = wall || dist[si] < 16;
+    if (!active) {
+      runActive = false;
+      continue;
+    }
+    const s = track.samples[si];
+    const nx = -Math.sin(s.heading);
+    const ny = Math.cos(s.heading);
+    const off = offsetAt(si);
+    const px = s.x + nx * off;
+    const py = s.y + ny * off;
+    const pz = s.z - off * Math.sin(s.bank);
+    verts.push(px, py, pz, px, py, pz + H);
+    const vi = verts.length / 3 - 2;
+    if (runActive) {
+      const a = vi - 2;
+      const b = vi - 1;
+      const c = vi;
+      const d = vi + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+    runActive = true;
+  }
+  if (indices.length === 0) return null;
+  return { positions: Float32Array.from(verts), indices: Uint32Array.from(indices) };
 }
 
 /** Simple grid mesh from a terrain sampler, for scene/export. */

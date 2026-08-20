@@ -44,6 +44,18 @@ export interface CircuitMetrics {
   meanAbsCutFill: number; // 0 in blank-canvas mode
   maxCut: number;
   maxFill: number;
+
+  // character / heterogeneity
+  /** number of distinctive named features around the lap */
+  featureCount: number;
+  /** entropy of surface types around the lap, 0..100 */
+  surfaceDiversity: number;
+  /** width range (max - min total width), meters */
+  widthRange: number;
+  /** mean pavement roughness 0..1 */
+  meanRoughness: number;
+  /** circuit era */
+  era: string;
 }
 
 function clamp100(v: number): number {
@@ -196,6 +208,22 @@ export function computeMetrics(track: Track, speed: SpeedProfile): CircuitMetric
 
   const heavyBraking = speed.brakingZones.filter((z) => z.severity > 8).length;
 
+  // heterogeneity metrics
+  const surfBins = new Array(4).fill(0);
+  let roughSum = 0;
+  let wMin = Infinity;
+  let wMax = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const pr = track.props;
+    surfBins[pr.surface[i] ?? 0]++;
+    roughSum += pr.roughness[i] ?? 0;
+    const w = (pr.widthL[i] ?? 6) + (pr.widthR[i] ?? 6);
+    if (w < wMin) wMin = w;
+    if (w > wMax) wMax = w;
+  }
+  const surfaceDiversity = clamp100(100 * normEntropy(surfBins) * 1.2);
+  const featureCount = track.features?.length ?? 0;
+
   return {
     lapTime: speed.lapTime,
     avgSpeedKmh: speed.vAvg * 3.6,
@@ -229,6 +257,12 @@ export function computeMetrics(track: Track, speed: SpeedProfile): CircuitMetric
     meanAbsCutFill: cutFillSum / Math.max(1, n),
     maxCut,
     maxFill,
+
+    featureCount,
+    surfaceDiversity,
+    widthRange: Number.isFinite(wMax - wMin) ? wMax - wMin : 0,
+    meanRoughness: roughSum / Math.max(1, n),
+    era: track.identity?.era ?? "modern",
   };
 }
 

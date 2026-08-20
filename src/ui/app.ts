@@ -779,6 +779,13 @@ export class App {
         this.store.set({ terrain: null, terrainContext: null, buildings: null, site: null }, "terrain", "site");
         void this.generate();
       },
+      onPlaceJump: (f) => {
+        const mid = ((f.sStart + f.sEnd) / 2) % (this.store.state.track?.length ?? 1);
+        this.view2d.centerOn(mid);
+        this.lastHoverS = mid;
+        this.store.set({ selectedS: mid }, "selectedS");
+        this.dirty2d = true;
+      },
     });
     this.sidebarEl.replaceWith(elSidebar);
     this.sidebarEl = elSidebar;

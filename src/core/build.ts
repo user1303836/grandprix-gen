@@ -19,6 +19,7 @@ import {
 import { kappaFromElements, totalTurning, morphElements, preCloseElements } from "./elements";
 import { detectCorners, findStartFinish, makeSectors } from "./corners";
 import { designVerticalProfile, designTerrainProfile } from "./vertical";
+import { designCharacter } from "./profiles";
 import { Rng } from "./prng";
 import {
   GENERATOR_VERSION,
@@ -125,7 +126,7 @@ export function buildTrack(
   const sectors = makeSectors(uni.length, 0);
 
   // 9. vertical
-  let groundZ = new Float64Array(n);
+  const groundZ = new Float64Array(n);
   let z: Float64Array;
   if (opts.terrainSampler) {
     for (let i = 0; i < n; i++) groundZ[i] = opts.terrainSampler(uni.x[i], uni.y[i]);
@@ -137,11 +138,22 @@ export function buildTrack(
     groundZ.fill(0);
   }
 
-  // 10. banking
-  const bank = designBanking(kappa, corners, ds, params, seed);
-
-  // 11. width
-  const width = designWidth(kappa, corners, ds, params, seed);
+  // 10. character: identity -> features -> geometry effects -> profiles
+  const character = designCharacter({
+    seed,
+    params,
+    elements,
+    corners,
+    n,
+    ds,
+    length: uni.length,
+    z,
+    groundZ,
+    kappa,
+  });
+  z = character.z;
+  const bank = character.bank;
+  const props = character.props;
 
   // assemble samples
   const samples: TrackSample[] = new Array(n);
@@ -154,7 +166,7 @@ export function buildTrack(
       heading: heading[i],
       kappa: kappa[i],
       bank: bank[i],
-      width: width[i],
+      width: props.widthL[i] + props.widthR[i],
       groundZ: groundZ[i],
       speed: NaN,
     };
@@ -173,6 +185,9 @@ export function buildTrack(
     sectors,
     site: opts.site ?? null,
     terrain: opts.terrain ?? null,
+    identity: character.identity,
+    features: character.features,
+    props,
   };
   return { track, closureError: repaired.closureError };
 }
@@ -249,72 +264,6 @@ export function applyDeform(x: Float64Array, y: Float64Array, deform: DeformStat
       y[i] = cy + (dy / r) * nr;
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// Banking / width
-// ---------------------------------------------------------------------------
-
-function designBanking(
-  kappa: Float64Array,
-  corners: { sApex: number; id: number }[],
-  ds: number,
-  params: TrackParams,
-  seed: number,
-): Float64Array {
-  const n = kappa.length;
-  const maxBank = params.banking * (12 * Math.PI) / 180; // up to ~12 deg
-  const bank = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    bank[i] = maxBank * Math.tanh(kappa[i] * 140);
-  }
-  // off-camber: seeded corners get reversed banking
-  if (params.offCamber > 0.01 && corners.length > 0) {
-    const rng = Rng.fromSalt(seed, 7303);
-    const L = n * ds;
-    for (const c of corners) {
-      if (!rng.bool(params.offCamber * 0.7)) continue;
-      const widthM = 90;
-      const range = Math.ceil(widthM / ds);
-      const i0 = Math.round(c.sApex / ds);
-      const flip = -params.offCamber * 1.6;
-      for (let d = -range; d <= range; d++) {
-        const i = (((i0 + d) % n) + n) % n;
-        const w = Math.exp(-(d * ds * d * ds) / (2 * (widthM / 2) * (widthM / 2)));
-        bank[i] = bank[i] * (1 - w) + -Math.abs(bank[i]) * Math.sign(bank[i] || 1) * w * (1 + flip);
-      }
-    }
-    void L;
-  }
-  // smooth to enforce roll-rate plausibility
-  return smoothCircular(bank, Math.max(1, 20 / ds));
-}
-
-function designWidth(
-  kappa: Float64Array,
-  corners: { sApex: number; sStart: number; sEnd: number; minRadius: number }[],
-  ds: number,
-  params: TrackParams,
-  seed: number,
-): Float64Array {
-  const n = kappa.length;
-  const width = new Float64Array(n);
-  width.fill(params.width);
-  const rng = Rng.fromSalt(seed, 7404);
-  for (const c of corners) {
-    // tight corners get slightly wider entries/exits
-    const extra = c.minRadius < 60 ? rng.range(0.5, 2.0) : rng.range(0, 0.8);
-    if (extra < 0.2) continue;
-    const widthM = 70;
-    const range = Math.ceil(widthM / ds);
-    const i0 = Math.round(c.sApex / ds);
-    for (let d = -range; d <= range; d++) {
-      const i = (((i0 + d) % n) + n) % n;
-      const w = Math.exp(-(d * ds * d * ds) / (2 * (widthM / 2.5) * (widthM / 2.5)));
-      width[i] = Math.max(width[i], params.width + extra * w);
-    }
-  }
-  return width;
 }
 
 // ---------------------------------------------------------------------------

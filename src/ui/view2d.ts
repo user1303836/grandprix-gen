@@ -248,6 +248,21 @@ export class View2D {
     void dpr;
   }
 
+  /** Center the camera on a lap station. */
+  centerOn(sStation: number): void {
+    const track = this.lastState?.track;
+    if (!track) return;
+    const idx = Math.round(sStation / track.ds) % track.samples.length;
+    const p = track.samples[idx];
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    this.scale = Math.max(this.scale, 0.5);
+    this.camX = w / 2 - p.x * this.scale;
+    this.camY = h / 2 + p.y * this.scale;
+    this.needsFit = false;
+    this.hoverS = sStation;
+  }
+
   private wx(x: number): number {
     return x * this.scale + this.camX;
   }
@@ -299,6 +314,7 @@ export class View2D {
     this.drawTrack(state, track);
     if (state.lockRange) this.drawLockRange(track, state.lockRange);
     if (state.showCorners) this.drawCornerNumbers(track);
+    this.drawFeatureLabels(track);
     this.drawStartFinish(track);
     if (state.showControlPoints) this.drawDebug(track);
     if (this.hoverS !== null) this.drawHoverMarker(track, this.hoverS, dpr);
@@ -459,30 +475,78 @@ export class View2D {
     ctx.fillStyle = "rgba(160,165,150,0.16)";
     ctx.fill();
 
-    // asphalt band
+    // asphalt band per-segment, colored by surface kind
+    const SURF_COLORS = ["#2e2f34", "#43423f", "#8f8d84", "#333438"];
+    const wPx = (m: number) => Math.max(1.2, m * this.scale);
+    ctx.lineCap = "butt";
+    const step = Math.max(1, Math.round(2 / track.ds));
+    for (let i = 0; i < n; i += step) {
+      const a = s[i];
+      const b = s[(i + step) % n];
+      const sk = track.props?.surface[i] ?? 0;
+      ctx.strokeStyle = SURF_COLORS[sk] ?? SURF_COLORS[0];
+      ctx.lineWidth = wPx(a.width);
+      ctx.beginPath();
+      ctx.moveTo(this.wx(a.x), this.wy(a.y));
+      ctx.lineTo(this.wx(b.x), this.wy(b.y));
+      ctx.stroke();
+    }
+    // crisp edges
+    ctx.strokeStyle = "#4a4f58";
+    ctx.lineWidth = 1;
     ctx.beginPath();
     for (let i = 0; i <= n; i++) {
       const p = s[i % n];
       const nx = -Math.sin(p.heading);
       const ny = Math.cos(p.heading);
-      const x = this.wx(p.x + nx * (p.width / 2));
-      const y = this.wy(p.y + ny * (p.width / 2));
+      const hw = p.width / 2;
+      const x = this.wx(p.x + nx * hw);
+      const y = this.wy(p.y + ny * hw);
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
     for (let i = n; i >= 0; i--) {
       const p = s[i % n];
       const nx = -Math.sin(p.heading);
       const ny = Math.cos(p.heading);
-      ctx.lineTo(this.wx(p.x - nx * (p.width / 2)), this.wy(p.y - ny * (p.width / 2)));
+      const hw = p.width / 2;
+      ctx.lineTo(this.wx(p.x - nx * hw), this.wy(p.y - ny * hw));
     }
     ctx.closePath();
-    ctx.fillStyle = "#23262c";
-    ctx.fill();
-    ctx.strokeStyle = "#454b55";
-    ctx.lineWidth = 1;
     ctx.stroke();
 
+    // runoff edges colored by kind (grouped strokes)
+    if (track.props) {
+      const RUNOFF_COLORS = ["rgba(88,110,62,0.8)", "rgba(156,143,115,0.85)", "rgba(90,91,95,0.85)", "rgba(120,116,108,0.95)"];
+      for (const side of ["L", "R"] as const) {
+        let curKind = -1;
+        let prevKind = -1;
+        ctx.lineWidth = Math.max(1.2, 2.2 * this.scale);
+        for (let i = 0; i <= n; i++) {
+          const p = s[i % n];
+          const kind = side === "L" ? track.props.runoffL[i % n] : track.props.runoffR[i % n];
+          if (kind !== curKind) {
+            if (curKind >= 0) ctx.stroke();
+            curKind = kind;
+            ctx.strokeStyle = RUNOFF_COLORS[kind] ?? RUNOFF_COLORS[0];
+            ctx.beginPath();
+          }
+          const nx = -Math.sin(p.heading);
+          const ny = Math.cos(p.heading);
+          const half = side === "L" ? track.props.widthL[i % n] : track.props.widthR[i % n];
+          const kerbW = 1.4;
+          const x = this.wx(p.x + nx * (half + kerbW) * (side === "L" ? 1 : -1));
+          const y = this.wy(p.y + ny * (half + kerbW) * (side === "L" ? 1 : -1));
+          if (i === 0 || kind !== prevKind) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+          prevKind = kind;
+        }
+        ctx.stroke();
+      }
+    }
     // sector tint underlay
     if (state.showSectors && track.sectors.length === 3) {
       const colors = ["rgba(224,83,61,0.5)", "rgba(61,224,139,0.5)", "rgba(79,159,247,0.5)"];
@@ -671,6 +735,37 @@ export class View2D {
     }
   }
 
+  private drawFeatureLabels(track: Track): void {
+    const ctx = this.ctx;
+    const s = track.samples;
+    const n = s.length;
+    if (track.features && track.features.length > 0) {
+      const dpr = window.devicePixelRatio || 1;
+      ctx.font = `italic ${9.5 * dpr}px Georgia, serif`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "bottom";
+      for (const f of track.features) {
+        const sMid = ((f.sStart + f.sEnd) / 2) % track.length;
+        const idx = Math.round(sMid / track.ds) % n;
+        const p = s[idx];
+        const nx = -Math.sin(p.heading);
+        const ny = Math.cos(p.heading);
+        const off = p.width / 2 + 34 / this.scale + 18;
+        const x = this.wx(p.x + nx * off);
+        const y = this.wy(p.y + ny * off);
+        // connector tick
+        ctx.strokeStyle = "rgba(255,180,84,0.55)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(this.wx(p.x + nx * (p.width / 2 + 4)), this.wy(p.y + ny * (p.width / 2 + 4)));
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        ctx.fillStyle = "#ffb454";
+        ctx.fillText(f.name, x + 3, y - 2);
+      }
+    }
+  }
+
   private drawHoverMarker(track: Track, sHover: number, dpr: number): void {
     const ctx = this.ctx;
     const idx = Math.round(sHover / track.ds) % track.samples.length;
@@ -705,6 +800,27 @@ export class View2D {
       `Banking      ${((p.bank * 180) / Math.PI).toFixed(1).padStart(6)} °`,
       `Speed        ${(Number.isFinite(p.speed) ? (p.speed * 3.6).toFixed(0) : "---").padStart(6)} km/h`,
     );
+    // heterogeneous property readout
+    if (track.props) {
+      const SURF = ["asphalt+", "asphalt-", "concrete", "mixed"];
+      const KERB = ["none", "flat", "std", "aggr"];
+      const RUN = ["grass", "gravel", "asph", "WALL"];
+      const wL = track.props.widthL[idx];
+      const wR = track.props.widthR[idx];
+      lines.push(
+        `Width L/R    ${wL.toFixed(1)}/${wR.toFixed(1)} m`,
+        `Surface      ${SURF[track.props.surface[idx]] ?? "?"}`,
+        `Grip         ${track.props.grip[idx].toFixed(2)}  rough ${track.props.roughness[idx].toFixed(2)}`,
+        `Kerb L/R     ${KERB[track.props.kerbL[idx]]}/${KERB[track.props.kerbR[idx]]}`,
+        `Runoff L/R   ${RUN[track.props.runoffL[idx]]}/${RUN[track.props.runoffR[idx]]}`,
+      );
+      const bd = track.props.barrierDistL[idx];
+      if (bd < 20) lines.push(`Barrier L    ${bd.toFixed(0)} m`);
+      const fi = track.props.featureIdx[idx];
+      if (fi >= 0 && track.features[fi]) {
+        lines.push(`-- ${track.features[fi].name} --`);
+      }
+    }
     this.tooltip.textContent = lines.join("\n");
     this.tooltip.style.display = "block";
     const parent = this.canvas.parentElement!;

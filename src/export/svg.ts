@@ -60,8 +60,31 @@ export function trackToSvg(track: Track, opts: SvgOptions = {}): string {
     parts.push(`<g id="grid">${gridLines.join("")}</g>`);
   }
 
-  // track edges (filled band)
+  // track band (filled per segment, colored by surface kind)
   if (opts.drawEdges !== false) {
+    const SURF_DARK = ["#26272c", "#3a3936", "#7a7870", "#2b2c31"];
+    const segs: string[] = [];
+    const n2 = samples.length;
+    const step2 = Math.max(1, Math.round(n2 / 600));
+    for (let i = 0; i < n2; i += step2) {
+      const a = samples[i];
+      const b = samples[(i + step2) % n2];
+      const sk = track.props?.surface[i] ?? 0;
+      const col = dark ? SURF_DARK[sk] ?? SURF_DARK[0] : ["#555", "#777", "#aaa", "#666"][sk] ?? "#555";
+      const an = { x: -Math.sin(a.heading), y: Math.cos(a.heading) };
+      const bn = { x: -Math.sin(b.heading), y: Math.cos(b.heading) };
+      const aw = a.width / 2;
+      const bw = b.width / 2;
+      const pts = [
+        `${sx(a.x + an.x * aw).toFixed(1)},${sy(a.y + an.y * aw).toFixed(1)}`,
+        `${sx(b.x + bn.x * bw).toFixed(1)},${sy(b.y + bn.y * bw).toFixed(1)}`,
+        `${sx(b.x - bn.x * bw).toFixed(1)},${sy(b.y - bn.y * bw).toFixed(1)}`,
+        `${sx(a.x - an.x * aw).toFixed(1)},${sy(a.y - an.y * aw).toFixed(1)}`,
+      ];
+      segs.push(`<polygon points="${pts.join(" ")}" fill="${col}"/>`);
+    }
+    parts.push(`<g id="track-band">${segs.join("")}</g>`);
+    // outline
     const left: string[] = [];
     const right: string[] = [];
     for (const s of samples) {
@@ -71,10 +94,8 @@ export function trackToSvg(track: Track, opts: SvgOptions = {}): string {
       left.push(`${sx(s.x + nx * hw).toFixed(1)},${sy(s.y + ny * hw).toFixed(1)}`);
       right.push(`${sx(s.x - nx * hw).toFixed(1)},${sy(s.y - ny * hw).toFixed(1)}`);
     }
-    const band = left.join(" ") + " " + right.reverse().join(" ");
-    parts.push(
-      `<polygon points="${band}" fill="${dark ? "#2b2f36" : "#d8d8d8"}" stroke="${edge}" stroke-width="1.5"/>`,
-    );
+    parts.push(`<polyline points="${left.join(" ")}" fill="none" stroke="${edge}" stroke-width="1.2"/>`);
+    parts.push(`<polyline points="${right.join(" ")}" fill="none" stroke="${edge}" stroke-width="1.2"/>`);
   }
 
   // sector tinting of the centerline
@@ -127,6 +148,26 @@ export function trackToSvg(track: Track, opts: SvgOptions = {}): string {
       );
     }
     parts.push(`<g id="corners">${labels.join("")}</g>`);
+  }
+
+  // feature place labels
+  if (track.features && track.features.length > 0) {
+    const labels: string[] = [];
+    for (const f of track.features) {
+      const sMid = ((f.sStart + f.sEnd) / 2) % track.length;
+      const idx = Math.round(sMid / track.ds) % samples.length;
+      const s = samples[idx];
+      const nx = -Math.sin(s.heading);
+      const ny = Math.cos(s.heading);
+      const off = s.width / 2 + 30;
+      const lx = sx(s.x + nx * off);
+      const ly = sy(s.y + ny * off);
+      labels.push(
+        `<line x1="${sx(s.x + nx * (s.width / 2 + 4)).toFixed(1)}" y1="${sy(s.y + ny * (s.width / 2 + 4)).toFixed(1)}" x2="${lx.toFixed(1)}" y2="${ly.toFixed(1)}" stroke="#ffb454" stroke-width="0.8" stroke-opacity="0.6"/>` +
+          `<text x="${lx.toFixed(1)}" y="${(ly - 3).toFixed(1)}" font-family="Georgia, serif" font-style="italic" font-size="12" fill="#ffb454">${f.name}</text>`,
+      );
+    }
+    parts.push(`<g id="features">${labels.join("")}</g>`);
   }
 
   // metadata footer

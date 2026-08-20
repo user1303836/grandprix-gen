@@ -32,7 +32,13 @@ import {
   ConeGeometry,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { buildGridMesh, buildTrackMesh, type TrackMeshData } from "../export/mesh";
+import {
+  buildGridMesh,
+  buildTrackMesh,
+  buildBarrierMeshes,
+  type TrackMeshData,
+  type SimpleMesh,
+} from "../export/mesh";
 import { sampleAt } from "../core/types";
 import { carveSampler, makeTrackProximity, type TerrainGrid } from "../core/terrain";
 import type { OsmBuilding } from "../core/osm";
@@ -41,13 +47,23 @@ import type { AppState } from "./state";
 import type { Track } from "../core/types";
 
 const PART_COLORS: Record<string, number> = {
-  asphalt: 0x424449,
-  line_left: 0xf2f2f2,
-  line_right: 0xf2f2f2,
-  curb_left: 0xb93232,
-  curb_right: 0xd8d8d8,
-  runoff_left: 0x7d7a66,
-  runoff_right: 0x7d7a66,
+  asphalt: 0x35363b,
+  line: 0xf2f2f2,
+  kerb: 0xd8d8d8,
+  runoff: 0x7d7a66,
+};
+
+const KERB_COLORS: Record<string, number> = {
+  flat: 0xd8d4d0,
+  standard: 0xffffff, // striped texture
+  aggressive: 0xd45500,
+};
+
+const RUNOFF_COLORS: Record<string, number> = {
+  grass: 0x42592f,
+  gravel: 0x9c8f73,
+  asphalt: 0x55565a,
+  wall: 0x86827a,
 };
 
 export class View3D {
@@ -181,6 +197,15 @@ export class View3D {
         m.castShadow = true;
         this.trackGroup.add(m);
       }
+      // barrier walls (armco / concrete where infrastructure stands close)
+      const barriers = buildBarrierMeshes(track);
+      for (const [side, bm] of [["left", barriers.left], ["right", barriers.right]] as const) {
+        if (!bm) continue;
+        const wall = this.barrierMesh(bm, track);
+        wall.name = `barrier_${side}`;
+        wall.castShadow = true;
+        this.trackGroup.add(wall);
+      }
       this.addStartFinish(track);
       this.fitCamera(track, state.terrain);
     }
@@ -256,11 +281,13 @@ export class View3D {
   }
 
   // ------------------------------------------------------------ meshes
+  /** Resolve "band_side:kind" part names to materials. */
   private partMesh(mesh: TrackMeshData, start: number, count: number, name: string): Mesh {
     const used = new Map<number, number>();
     const pos: number[] = [];
     const nrm: number[] = [];
     const uv: number[] = [];
+    const col: number[] = [];
     const idx: number[] = [];
     for (let i = start; i < start + count; i++) {
       const vi = mesh.indices[i];
@@ -271,6 +298,7 @@ export class View3D {
         pos.push(mesh.positions[vi * 3], mesh.positions[vi * 3 + 2], -mesh.positions[vi * 3 + 1]);
         nrm.push(mesh.normals[vi * 3], mesh.normals[vi * 3 + 2], -mesh.normals[vi * 3 + 1]);
         uv.push(mesh.uvs[vi * 2], mesh.uvs[vi * 2 + 1]);
+        col.push(mesh.colors[vi * 3], mesh.colors[vi * 3 + 1], mesh.colors[vi * 3 + 2]);
       }
       idx.push(ni);
     }
@@ -278,25 +306,66 @@ export class View3D {
     geo.setAttribute("position", new BufferAttribute(new Float32Array(pos), 3));
     geo.setAttribute("normal", new BufferAttribute(new Float32Array(nrm), 3));
     geo.setAttribute("uv", new BufferAttribute(new Float32Array(uv), 2));
+    geo.setAttribute("color", new BufferAttribute(new Float32Array(col), 3));
     geo.setIndex(idx);
-    const isCurb = name.startsWith("curb");
+
+    const [bandKind, kindLabel] = name.split(":");
+    const band = bandKind.split("_")[0];
+    const isKerb = band === "kerb";
+    const isRunoff = band === "runoff";
+    const isLine = band === "line";
+    const isAsphalt = band === "asphalt";
+    const baseColor =
+      isKerb && kindLabel
+        ? (KERB_COLORS[kindLabel] ?? 0xd8d8d8)
+        : isRunoff && kindLabel
+          ? (RUNOFF_COLORS[kindLabel] ?? 0x7d7a66)
+          : (PART_COLORS[band] ?? 0x888888);
     const mat = new MeshStandardMaterial({
-      color: new Color(PART_COLORS[name] ?? 0x888888),
-      roughness: name === "asphalt" ? 0.97 : 0.85,
+      color: new Color(baseColor),
+      roughness: isAsphalt ? 0.97 : isRunoff && kindLabel === "gravel" ? 1 : 0.85,
       metalness: 0,
       side: DoubleSide,
-      polygonOffset: name.startsWith("line"),
+      vertexColors: isAsphalt, // surface tint + mottle lives in vertex colors
+      polygonOffset: isLine,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -2,
     });
-    if (isCurb) {
+    if (isKerb && kindLabel === "standard") {
       mat.map = this.stripedCurbTex;
+      mat.vertexColors = false;
       this.stripedCurbTex.wrapS = RepeatWrapping;
-      mat.color = new Color(0xffffff); // texture carries the color
     }
     const m = new Mesh(geo, mat);
     m.name = name;
     return m;
+  }
+
+  /** Armco / concrete barrier wall ribbon. */
+  private barrierMesh(bm: SimpleMesh, track: Track): Mesh {
+    const nVerts = bm.positions.length / 3;
+    const pos = new Float32Array(bm.positions.length);
+    for (let i = 0; i < bm.positions.length; i += 3) {
+      pos[i] = bm.positions[i];
+      pos[i + 1] = bm.positions[i + 2];
+      pos[i + 2] = -bm.positions[i + 1];
+    }
+    const geo = new BufferGeometry();
+    geo.setAttribute("position", new BufferAttribute(pos, 3));
+    geo.setIndex(new BufferAttribute(bm.indices, 1));
+    geo.computeVertexNormals();
+    // armco where barriers sit back, concrete where it's a wall at the edge
+    const isWallKind =
+      track.props &&
+      (track.props.runoffL[0] === 3 || track.props.runoffR[0] === 3);
+    const mat = new MeshStandardMaterial({
+      color: isWallKind ? 0x9a968c : 0x77807a,
+      roughness: 0.6,
+      metalness: isWallKind ? 0.05 : 0.35,
+      side: DoubleSide,
+    });
+    return new Mesh(geo, mat);
+    void nVerts;
   }
 
   /** Terrain mesh with hypsometric + slope vertex colors. */

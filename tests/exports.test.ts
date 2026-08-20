@@ -90,8 +90,8 @@ describe("exports", () => {
 
   it("OBJ has vertices and faces for all parts", () => {
     const obj = trackToObj(track);
-    expect(obj).toContain("o asphalt");
-    expect(obj).toContain("o curb_left");
+    expect(obj).toContain("o asphalt_modern");
+    expect(obj).toMatch(/o kerb_left_(standard|flat|aggressive)/);
     const vCount = (obj.match(/^v /gm) ?? []).length;
     const fCount = (obj.match(/^f /gm) ?? []).length;
     expect(vCount).toBeGreaterThan(1000);
@@ -102,7 +102,7 @@ describe("exports", () => {
     const py = trackToBlenderScript(track);
     expect(py).toContain("import bpy");
     expect(py).toContain("DATA = json.loads");
-    expect(py).toContain("build_strip");
+    expect(py).toContain("from_pydata");
     expect(py.length).toBeGreaterThan(2000);
   });
 });

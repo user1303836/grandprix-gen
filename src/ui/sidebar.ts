@@ -19,6 +19,7 @@ export interface SidebarCallbacks {
   onLockClear: () => void;
   onLockRegen: () => void;
   onClearSite: () => void;
+  onPlaceJump: (feature: import("../core/character").TrackFeature) => void;
 }
 
 const P = (v: number) => `${Math.round(v * 100)}`;
@@ -112,6 +113,30 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
       sliderRow("track width (m)", { min: 9, max: 18, step: 0.5, value: p.width, badge: "morph", format: (v) => v.toFixed(1), onInput: morph("width"), onCommit: morphCommit("width") }),
     ], false),
   );
+
+  // ---------------------------------------------------------- identity
+  wrap.append(
+    section("Identity", [
+      sliderRow("heritage", { min: 0, max: 1, step: 0.01, value: p.heritage ?? 0.45, badge: "struct", format: P, onInput: () => {}, onCommit: struct("heritage") }),
+      sliderRow("feature richness", { min: 0, max: 1, step: 0.01, value: p.featureRichness ?? 0.65, badge: "struct", format: P, onInput: () => {}, onCommit: struct("featureRichness") }),
+      el("div", { className: "hint", textContent: "heritage: era/roughness/width variation tendencies. richness: how many distinctive named places (karussell, crests, wall runs…) the lap develops." }),
+    ], false),
+  );
+
+  // ---------------------------------------------------------- places
+  if (state.track && state.track.features.length > 0) {
+    const list = el("div", { className: "history-list", style: "max-height:180px" });
+    for (const f of state.track.features) {
+      const item = el("div", { className: "history-item" }, [
+        el("span", { textContent: f.name }),
+        el("span", { textContent: `${(f.sStart / 1000).toFixed(1)}k` }),
+      ]);
+      item.title = `${f.kind} · station ${f.sStart.toFixed(0)}–${f.sEnd.toFixed(0)} m`;
+      item.addEventListener("click", () => cb.onPlaceJump(f));
+      list.append(item);
+    }
+    wrap.append(section(`Places (${state.track.features.length})`, [list], true));
+  }
 
   // ---------------------------------------------------------- terrain
   if (state.terrain) {

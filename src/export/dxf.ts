@@ -36,9 +36,12 @@ export function trackToDxf(track: Track): string {
     ["TRACK_RIGHT_EDGE", 8],
     ["CURB_LEFT", 1],
     ["CURB_RIGHT", 1],
+    ["BARRIER_LEFT", 30],
+    ["BARRIER_RIGHT", 30],
     ["START_FINISH", 5],
     ["SECTOR_LINES", 4],
     ["CORNERS", 3],
+    ["FEATURE_LABELS", 6],
     ["SITE_BOUNDARY", 2],
   ];
 
@@ -154,6 +157,49 @@ export function trackToDxf(track: Track): string {
         false,
       ),
     );
+  }
+
+  // barrier polylines where infrastructure stands close
+  if (track.props) {
+    for (const side of ["left", "right"] as const) {
+      const dist = side === "left" ? track.props.barrierDistL : track.props.barrierDistR;
+      const halfW = side === "left" ? track.props.widthL : track.props.widthR;
+      const runW = side === "left" ? track.props.runoffWidthL : track.props.runoffWidthR;
+      const pts: [number, number, number][] = [];
+      for (let i = 0; i < s.length; i++) {
+        const wall = (side === "left" ? track.props.runoffL[i] : track.props.runoffR[i]) === 3;
+        if (!wall && dist[i] >= 16) continue;
+        const p = s[i];
+        const nx = -Math.sin(p.heading);
+        const ny = Math.cos(p.heading);
+        const sign = side === "left" ? 1 : -1;
+        const off = wall ? sign * (halfW[i] + 2.6) : sign * (halfW[i] + 1.4 + runW[i] + dist[i]);
+        pts.push([p.x + nx * off, p.y + ny * off, p.z]);
+      }
+      if (pts.length > 1) {
+        out.push(polyline3d(side === "left" ? "BARRIER_LEFT" : "BARRIER_RIGHT", pts, false));
+      }
+    }
+  }
+
+  // place-name TEXT entities
+  for (const f of track.features ?? []) {
+    const sMid = ((f.sStart + f.sEnd) / 2) % track.length;
+    const idx = Math.round(sMid / track.ds) % s.length;
+    const p = s[idx];
+    const nx = -Math.sin(p.heading);
+    const ny = Math.cos(p.heading);
+    const off = p.width / 2 + 26;
+    const tx = p.x + nx * off;
+    const ty = p.y + ny * off;
+    out.push(dxfPair(0, "TEXT"));
+    out.push(dxfPair(8, "FEATURE_LABELS"));
+    out.push(dxfPair(10, tx.toFixed(2)));
+    out.push(dxfPair(20, ty.toFixed(2)));
+    out.push(dxfPair(30, (p.z + 2).toFixed(2)));
+    out.push(dxfPair(40, 14));
+    out.push(dxfPair(1, f.name.replace(/[\r\n]/g, " ")));
+    out.push(dxfPair(50, 0));
   }
 
   // site boundary

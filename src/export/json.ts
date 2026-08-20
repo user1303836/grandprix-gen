@@ -4,7 +4,7 @@
  * generator version, seed, params, DNA, samples, site, terrain meta.
  */
 
-import { GENERATOR_VERSION, type Track } from "../core/types";
+import { GENERATOR_VERSION, type PropertyProfiles, type Track } from "../core/types";
 
 export interface ProjectFile {
   format: "grandprix-gen/track";
@@ -13,12 +13,44 @@ export interface ProjectFile {
   track: Track;
 }
 
+/** PropertyProfiles hold typed arrays; JSON needs plain arrays. */
+function encodeProps(p: PropertyProfiles): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const k of Object.keys(p) as (keyof PropertyProfiles)[]) {
+    out[k] = Array.from(p[k] as Float32Array | Uint8Array | Int16Array, (v) => v);
+  }
+  return out;
+}
+
+function decodeProps(raw: Record<string, number[]>): PropertyProfiles {
+  return {
+    widthL: Float32Array.from(raw.widthL),
+    widthR: Float32Array.from(raw.widthR),
+    surface: Uint8Array.from(raw.surface),
+    roughness: Float32Array.from(raw.roughness),
+    grip: Float32Array.from(raw.grip),
+    crossfall: Float32Array.from(raw.crossfall),
+    kerbL: Uint8Array.from(raw.kerbL),
+    kerbR: Uint8Array.from(raw.kerbR),
+    runoffL: Uint8Array.from(raw.runoffL),
+    runoffR: Uint8Array.from(raw.runoffR),
+    runoffWidthL: Float32Array.from(raw.runoffWidthL),
+    runoffWidthR: Float32Array.from(raw.runoffWidthR),
+    barrierDistL: Float32Array.from(raw.barrierDistL),
+    barrierDistR: Float32Array.from(raw.barrierDistR),
+    featureIdx: Int16Array.from(raw.featureIdx),
+  };
+}
+
 export function serializeProject(track: Track): string {
   const file: ProjectFile = {
     format: "grandprix-gen/track",
     version: GENERATOR_VERSION,
     savedAt: new Date().toISOString(),
-    track,
+    track: {
+      ...track,
+      props: encodeProps(track.props) as unknown as PropertyProfiles,
+    },
   };
   return JSON.stringify(file, null, 1);
 }
@@ -44,6 +76,10 @@ export function deserializeProject(json: string): Track {
   for (const sm of t.samples) {
     if ((sm.speed as unknown) === null || sm.speed === undefined) sm.speed = NaN;
     if ((sm.groundZ as unknown) === null || sm.groundZ === undefined) sm.groundZ = NaN;
+  }
+  // restore typed property profiles (older/simple files may lack them)
+  if (t.props && !ArrayBuffer.isView(t.props.widthL)) {
+    t.props = decodeProps(t.props as unknown as Record<string, number[]>);
   }
   return t;
 }

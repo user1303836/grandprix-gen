@@ -1,5 +1,6 @@
 /**
  * glTF/GLB export via Three.js GLTFExporter (browser only).
+ * Includes heterogeneous surface parts + barrier walls.
  */
 
 import {
@@ -12,30 +13,50 @@ import {
   MeshStandardMaterial,
 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
-import { buildGridMesh, buildTrackMesh } from "./mesh";
+import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
 import { carveSampler, type TerrainGrid } from "../core/terrain";
 import type { Track } from "../core/types";
 
-const PART_COLORS: Record<string, number> = {
-  asphalt: 0x1b1c1e,
-  curb_left: 0xc22f2f,
-  curb_right: 0xe8e8e8,
-  runoff_left: 0x8a8a7a,
-  runoff_right: 0x8a8a7a,
+const KERB_COLORS: Record<string, number> = {
+  flat: 0xd8d4d0,
+  standard: 0xc23a2f,
+  aggressive: 0xd45500,
 };
+const RUNOFF_COLORS: Record<string, number> = {
+  grass: 0x42592f,
+  gravel: 0x9c8f73,
+  asphalt: 0x55565a,
+  wall: 0x86827a,
+};
+const ASPHALT_BASE: Record<string, number> = {
+  modern: 0x35363b,
+  aged: 0x46474a,
+  concrete: 0x94928a,
+  patched: 0x3e3f42,
+};
+
+function partColor(name: string): number {
+  const [bandKind, kindLabel] = name.split(":");
+  const band = bandKind.split("_")[0];
+  if (band === "kerb" && kindLabel) return KERB_COLORS[kindLabel] ?? 0xd8d8d8;
+  if (band === "runoff" && kindLabel) return RUNOFF_COLORS[kindLabel] ?? 0x7d7a66;
+  if (band === "asphalt" && kindLabel) return ASPHALT_BASE[kindLabel] ?? 0x35363b;
+  if (band === "line") return 0xf2f2f2;
+  return 0x888888;
+}
 
 export async function trackToGlb(track: Track, terrain?: TerrainGrid | null): Promise<ArrayBuffer> {
   const group = new Group();
   group.name = "grandprix-gen-circuit";
 
-  const mesh = buildTrackMesh(track, { curbWidth: 1.2, runoffWidth: 6, stride: 1 });
+  const mesh = buildTrackMesh(track, { curbWidth: 1.3, runoffWidth: 9, stride: 1 });
   for (const part of mesh.parts) {
     if (part.count === 0) continue;
     const geo = new BufferGeometry();
-    // gather part vertices (compact buffer)
     const used = new Map<number, number>();
     const pos: number[] = [];
     const nrm: number[] = [];
+    const uv: number[] = [];
     const idx: number[] = [];
     for (let i = part.start; i < part.start + part.count; i++) {
       const vi = mesh.indices[i];
@@ -45,20 +66,44 @@ export async function trackToGlb(track: Track, terrain?: TerrainGrid | null): Pr
         used.set(vi, ni);
         pos.push(mesh.positions[vi * 3], mesh.positions[vi * 3 + 2], -mesh.positions[vi * 3 + 1]); // y-up
         nrm.push(mesh.normals[vi * 3], mesh.normals[vi * 3 + 2], -mesh.normals[vi * 3 + 1]);
+        uv.push(mesh.uvs[vi * 2], mesh.uvs[vi * 2 + 1]);
       }
       idx.push(ni);
     }
     geo.setAttribute("position", new BufferAttribute(new Float32Array(pos), 3));
     geo.setAttribute("normal", new BufferAttribute(new Float32Array(nrm), 3));
+    geo.setAttribute("uv", new BufferAttribute(new Float32Array(uv), 2));
     geo.setIndex(idx);
     const mat = new MeshStandardMaterial({
-      color: new Color(PART_COLORS[part.name] ?? 0x888888),
-      roughness: 0.92,
+      color: new Color(partColor(part.name)),
+      roughness: part.name.startsWith("asphalt") ? 0.95 : 0.85,
       metalness: 0,
       side: DoubleSide,
     });
     const m = new Mesh(geo, mat);
-    m.name = part.name;
+    m.name = part.name.replace(":", "_");
+    group.add(m);
+  }
+
+  // barrier walls
+  const barriers = buildBarrierMeshes(track);
+  for (const [side, bm] of [["left", barriers.left], ["right", barriers.right]] as const) {
+    if (!bm) continue;
+    const geo = new BufferGeometry();
+    const pos = new Float32Array(bm.positions.length);
+    for (let i = 0; i < bm.positions.length; i += 3) {
+      pos[i] = bm.positions[i];
+      pos[i + 1] = bm.positions[i + 2];
+      pos[i + 2] = -bm.positions[i + 1];
+    }
+    geo.setAttribute("position", new BufferAttribute(pos, 3));
+    geo.setIndex(new BufferAttribute(bm.indices, 1));
+    geo.computeVertexNormals();
+    const m = new Mesh(
+      geo,
+      new MeshStandardMaterial({ color: 0x77807a, roughness: 0.6, metalness: 0.3, side: DoubleSide }),
+    );
+    m.name = `barrier_${side}`;
     group.add(m);
   }
 
