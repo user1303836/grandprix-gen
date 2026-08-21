@@ -14,7 +14,6 @@ import {
   Color,
   DirectionalLight,
   DoubleSide,
-  DynamicDrawUsage,
   Fog,
   Group,
   InstancedMesh,
@@ -28,6 +27,7 @@ import {
   Raycaster,
   RepeatWrapping,
   Scene,
+  ShaderMaterial,
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
@@ -37,6 +37,7 @@ import {
   ConeGeometry,
   CylinderGeometry,
   BoxGeometry,
+  IcosahedronGeometry,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -48,6 +49,7 @@ import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
 import { makeAsphaltTexture, makeGrassTexture, makeGravelTexture } from "./textures";
 import { buildFurniture } from "./furniture";
+import { CloudShadows, makeWaterMaterial } from "./water";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
@@ -409,7 +411,7 @@ export class View3D {
         ctxMesh.receiveShadow = true;
         this.trackGroup.add(ctxMesh);
       }
-      // water
+      // water (animated ripples + sun glint)
       const minZ = Math.min(g.minElevation, state.terrainContext?.minElevation ?? Infinity);
       if (minZ < 2) {
         const extent =
@@ -419,8 +421,19 @@ export class View3D {
           ) * 0.75;
         const water = buildGridMesh(() => Math.max(0.25, minZ + 0.1), -extent, -extent, extent, extent, 2, 2);
         const wm = this.gridMesh(water.positions, water.indices, 0x2b4a63, true);
+        wm.material = makeWaterMaterial(this.sunDirection());
         this.trackGroup.add(wm);
       }
+      // drifting cloud shadows over the whole site
+      const spanC = Math.max(g.width, g.height) * g.resolution;
+      this.cloudShadows.configure(
+        (g.originX + (g.width * g.resolution) / 2),
+        -(g.originY + (g.height * g.resolution) / 2),
+        (g.minElevation + g.maxElevation) / 2 + 55,
+        spanC * 1.5,
+        SKY_PRESETS[this.dayTime].floodlights ? 0 : 0.3,
+      );
+      this.trackGroup.add(this.cloudShadows.mesh);
       this.addTrees(state.terrain, track);
       if (state.buildings && state.buildings.length > 0) {
         // seat buildings on the CARVED terrain so they don't float/sink
@@ -860,8 +873,8 @@ export class View3D {
     // world-space uvs so the grass detail tiles every ~34 m
     const uvs = new Float32Array(nVerts * 2);
     for (let i = 0; i < positions.length; i += 3) {
-      uvs[(i / 3) * 2] = positions[i] / 34;
-      uvs[(i / 3) * 2 + 1] = positions[i + 1] / 34;
+      uvs[(i / 3) * 2] = positions[i] / 57;
+      uvs[(i / 3) * 2 + 1] = positions[i + 1] / 57;
     }
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(pos, 3));
@@ -906,9 +919,10 @@ export class View3D {
   private addTrees(grid: TerrainGrid, track: Track): void {
     const proximity = makeTrackProximity(track.samples);
     const rng = new Rng(track.seed ^ 0x7ee5);
-    const positions: Matrix4[] = [];
+    const conifers: { m: Matrix4; s: number }[] = [];
+    const leafies: { m: Matrix4; s: number }[] = [];
     const step = 4; // grid cells between candidates
-    const jitter = grid.resolution * 3;
+    const zMid = (grid.minElevation + grid.maxElevation) / 2;
     for (let iy = 2; iy < grid.height - 2; iy += step) {
       for (let ix = 2; ix < grid.width - 2; ix += step) {
         const x = grid.originX + (ix + rng.spread(0.5)) * grid.resolution;
@@ -920,27 +934,57 @@ export class View3D {
         const near = proximity.nearest(x, y, 60);
         if (near && near.d < 48) continue;
         if (rng.next() < 0.35) continue; // thin it out
+        // elevation banding: conifers rule the heights, leafy below
+        const conifer = z > zMid + rng.spread(40);
         const scale = 0.7 + rng.next() * 0.9;
-        const mat = new Matrix4()
+        const m = new Matrix4()
           .makeRotationY(rng.range(0, Math.PI * 2))
-          .setPosition(x, z + 2.6 * scale, -y)
+          .setPosition(x, z, -y)
           .scale(new Vector3(scale, scale, scale));
-        positions.push(mat);
-        if (positions.length >= 4000) break;
+        (conifer ? conifers : leafies).push({ m, s: scale });
+        if (conifers.length + leafies.length >= 4000) break;
       }
-      if (positions.length >= 4000) break;
+      if (conifers.length + leafies.length >= 4000) break;
     }
-    void jitter;
-    if (positions.length === 0) return;
-    const geo = new ConeGeometry(2.4, 7.5, 6);
-    geo.translate(0, 0, 0);
-    const mat = new MeshStandardMaterial({ color: 0x2f4a22, roughness: 1 });
-    const inst = new InstancedMesh(geo, mat, positions.length);
-    positions.forEach((m, i) => inst.setMatrixAt(i, m));
-    inst.instanceMatrix.setUsage(DynamicDrawUsage);
-    inst.castShadow = true;
-    inst.name = "trees";
-    this.trackGroup!.add(inst);
+    if (conifers.length + leafies.length === 0) return;
+
+    const trunkGeo = new CylinderGeometry(0.22, 0.34, 3.2, 5);
+    trunkGeo.translate(0, 1.6, 0);
+    const trunkMat = new MeshStandardMaterial({ color: 0x4a3826, roughness: 1 });
+    const coneGeo = new ConeGeometry(2.5, 8.5, 6);
+    coneGeo.translate(0, 6.6, 0);
+    const coneMat = new MeshStandardMaterial({ color: 0x3d6132, roughness: 1 });
+    const leafGeo = new IcosahedronGeometry(3.4, 1);
+    leafGeo.translate(0, 5.2, 0);
+    leafGeo.scale(1, 1.25, 1);
+    const leafMat = new MeshStandardMaterial({ color: 0x517434, roughness: 1 });
+
+    const total = conifers.length + leafies.length;
+    const trunks = new InstancedMesh(trunkGeo, trunkMat, total);
+    const cones = new InstancedMesh(coneGeo, coneMat, Math.max(1, conifers.length));
+    const leaves = new InstancedMesh(leafGeo, leafMat, Math.max(1, leafies.length));
+    let ti = 0;
+    conifers.forEach((c, i) => {
+      trunks.setMatrixAt(ti++, c.m);
+      cones.setMatrixAt(i, c.m);
+      // slight per-instance color variation
+      cones.setColorAt(i, new Color(0x3d6132).offsetHSL(0, 0, (c.s - 1) * 0.08));
+    });
+    leafies.forEach((c, i) => {
+      trunks.setMatrixAt(ti++, c.m);
+      leaves.setMatrixAt(i, c.m);
+      leaves.setColorAt(i, new Color(0x517434).offsetHSL((c.s - 1) * 0.04, 0, (c.s - 1) * 0.07));
+    });
+    trunks.instanceMatrix.needsUpdate = true;
+    cones.instanceMatrix.needsUpdate = true;
+    leaves.instanceMatrix.needsUpdate = true;
+    if (cones.instanceColor) cones.instanceColor.needsUpdate = true;
+    if (leaves.instanceColor) leaves.instanceColor.needsUpdate = true;
+    trunks.castShadow = cones.castShadow = leaves.castShadow = true;
+    trunks.name = "trees-trunks";
+    cones.name = "trees-conifers";
+    leaves.name = "trees-leafy";
+    this.trackGroup!.add(trunks, cones, leaves);
   }
 
   /** Extruded OSM building footprints, merged into one geometry. */
@@ -1046,6 +1090,7 @@ export class View3D {
   }
 
   private headlight: PointLight | null = null;
+  private cloudShadows = new CloudShadows();
 
   // ---------------------------------------------------- hover tooltip
   private hoverRay = new Raycaster();
@@ -1235,8 +1280,15 @@ export class View3D {
       this.updateHover(performance.now());
       this.updateFloodlights();
     }
+    const tNow = performance.now() / 1000;
     this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
-    this.sky.setTime(performance.now() / 1000);
+    this.sky.setTime(tNow);
+    this.cloudShadows.setTime(tNow);
+    this.trackGroup?.traverse((o) => {
+      if (o instanceof Mesh && o.material instanceof ShaderMaterial && o.material.uniforms?.time) {
+        o.material.uniforms.time.value = tNow;
+      }
+    });
     this.composer.render();
   }
 }

@@ -66,10 +66,10 @@ export function makeGrassTexture(seed = 4242): CanvasTexture {
   const rnd = seededRandom(seed);
   ctx.fillStyle = "#e4e9d8";
   ctx.fillRect(0, 0, S, S);
-  for (let k = 0; k < 5200; k++) {
-    const g = 160 + rnd() * 80;
-    const r2 = 120 + rnd() * 60;
-    ctx.strokeStyle = `rgba(${r2 * 0.8},${g},${r2 * 0.55},${0.25 + rnd() * 0.4})`;
+  for (let k = 0; k < 3400; k++) {
+    const g = 175 + rnd() * 65;
+    const r2 = 135 + rnd() * 55;
+    ctx.strokeStyle = `rgba(${r2 * 0.8},${g},${r2 * 0.55},${0.18 + rnd() * 0.3})`;
     const x = rnd() * S;
     const y = rnd() * S;
     ctx.beginPath();
@@ -92,6 +92,7 @@ export function makeGrassTexture(seed = 4242): CanvasTexture {
   const tex = new CanvasTexture(cv);
   tex.wrapS = tex.wrapT = RepeatWrapping;
   tex.colorSpace = SRGBColorSpace;
+  tex.anisotropy = 8;
   return tex;
 }
 
