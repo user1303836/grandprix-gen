@@ -264,6 +264,7 @@ export class View3D {
     this.fitBtn = fitBtn;
     this.setupDayControl();
     this.hud = new DriveHUD(this.container);
+    this.setupFlare();
     this.scene.add(this.rain.points);
     this.setupWeatherControl();
     this.setupCamControl();
@@ -705,6 +706,70 @@ export class View3D {
     wrap.style.display = "none";
     this.container.appendChild(wrap);
     this.dayControl = wrap;
+  }
+
+  // ---------------------------------------------------------- lens flare
+  private flareSprites: { sp: Sprite; k: number; size: number; tint: number; op: number }[] = [];
+  private setupFlare(): void {
+    const mkGlow = (inner: string, outer: string): CanvasTexture => {
+      const cv = document.createElement("canvas");
+      cv.width = 128;
+      cv.height = 128;
+      const ctx = cv.getContext("2d")!;
+      const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 62);
+      g.addColorStop(0, inner);
+      g.addColorStop(1, outer);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 128, 128);
+      return new CanvasTexture(cv);
+    };
+    const diskTex = mkGlow("rgba(255,255,250,1)", "rgba(255,240,200,0)");
+    const ghostTex = mkGlow("rgba(255,230,190,0.55)", "rgba(255,230,190,0)");
+    const defs: [number, number, number, number][] = [
+      [1.0, 220, 0xfff8e8, 0.9], // core
+      [0.78, 60, 0xffe8b8, 0.35],
+      [0.55, 34, 0xd8e8ff, 0.28],
+      [0.35, 90, 0xffe0a8, 0.2],
+      [0.12, 26, 0xffffff, 0.22],
+    ];
+    for (const [k, size, tint, op] of defs) {
+      const mat = new SpriteMaterial({
+        map: k === 1 ? diskTex : ghostTex,
+        color: tint,
+        transparent: true,
+        opacity: 0,
+        blending: AdditiveBlending,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const sp = new Sprite(mat);
+      sp.renderOrder = 60;
+      this.flareSprites.push({ sp, k, size, tint, op });
+      this.scene.add(sp);
+    }
+  }
+
+  /** Position/opacity of the flare along the sun line each frame. */
+  private updateFlare(): void {
+    if (this.flareSprites.length === 0) return;
+    const sunDir = this.sunDirection();
+    const p = SKY_PRESETS[this.dayTime];
+    const raining = this.weather === "rain";
+    const visible = sunDir.y > 0.01 && !raining;
+    // vector from camera toward the sun, projected through the view center
+    const camDir = new Vector3();
+    this.camera.getWorldDirection(camDir);
+    const facing = camDir.dot(sunDir);
+    const strength = visible ? Math.max(0, facing - 0.25) * p.sunIntensity * 0.4 : 0;
+    const dist = 8000;
+    const center = this.camera.position.clone().add(camDir.clone().multiplyScalar(4000));
+    const sunPos = this.camera.position.clone().add(sunDir.clone().multiplyScalar(dist));
+    for (const f of this.flareSprites) {
+      // k=1 at the sun, others interpolated toward the screen center
+      f.sp.position.copy(sunPos.clone().lerp(center, 1 - f.k));
+      f.sp.scale.set(f.size, f.size, 1);
+      (f.sp.material as SpriteMaterial).opacity = f.op * strength;
+    }
   }
 
   /** Cinematic auto-orbit: slow aerial dolly around the circuit. */
@@ -1811,6 +1876,7 @@ export class View3D {
     this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.sky.setTime(tNow);
     this.cloudShadows.setTime(tNow);
+    this.updateFlare();
     this.windTime.value = tNow;
     windUniform.value = tNow;
     this.updateWetness(dt);
