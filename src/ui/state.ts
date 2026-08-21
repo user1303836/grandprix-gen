@@ -42,6 +42,11 @@ export interface AppState {
   terrain: TerrainGrid | null;
   /** Coarse surrounding-area DEM for context rendering. */
   terrainContext: TerrainGrid | null;
+  /** Satellite imagery drape covering the site grid (best-effort). */
+  imagery: import("./imagery").ImageryDrape | null;
+  imageryContext: import("./imagery").ImageryDrape | null;
+  /** show satellite drape on the 3D terrain (when available) */
+  showSatellite: boolean;
   /** OSM building footprints in local metric coords. */
   buildings: OsmBuilding[] | null;
   /** building avoidance strength during terrain generation */
@@ -83,6 +88,9 @@ export class Store {
       candidatesSelected: new Set(),
       terrain: null,
       terrainContext: null,
+      imagery: null,
+      imageryContext: null,
+      showSatellite: true,
       buildings: null,
       avoidBuildings: "soft",
       site: null,

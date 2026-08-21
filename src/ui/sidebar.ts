@@ -268,6 +268,7 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
     ["showControlPoints", "Debug DNA", state.showControlPoints],
     ["showTerrainHeat", "Terrain", state.showTerrainHeat],
     ["debugCivil", "Civil", state.debugCivil],
+    ["showSatellite", "Satellite", state.showSatellite],
   ];
   for (const [key, name, val] of toggles) {
     const b = el("button", { textContent: name });

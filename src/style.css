@@ -775,3 +775,16 @@ button.active {
 .cam-control {
   top: 176px;
 }
+
+.imagery-attrib {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 20;
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(10, 13, 17, 0.45);
+  padding: 2px 7px;
+  border-radius: 4px;
+  pointer-events: none;
+}

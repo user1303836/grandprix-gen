@@ -518,8 +518,28 @@ export class App {
     context: import("../core/terrain").TerrainGrid | null,
   ): void {
     const site = { lat: sel.lat, lon: sel.lon, radiusMeters: sel.radiusMeters };
-    this.store.set({ terrain: grid, terrainContext: context, buildings: null, site }, "terrain", "terrainContext", "buildings", "site");
+    this.store.set({ terrain: grid, terrainContext: context, buildings: null, site, imagery: null }, "terrain", "terrainContext", "buildings", "site", "imagery");
     this.setView("2d");
+    // satellite drape (best-effort, never blocks the first generate)
+    void (async () => {
+      try {
+        const { fetchImageryDrape } = await import("./imagery");
+        const drape = await fetchImageryDrape(grid);
+        if (drape && this.store.state.terrain === grid) {
+          this.store.set({ imagery: drape }, "imagery");
+          this.view3d.setState(this.store.state);
+        }
+        if (context) {
+          const cdrape = await fetchImageryDrape(context, 14);
+          if (cdrape && this.store.state.terrainContext === context) {
+            this.store.set({ imageryContext: cdrape }, "imageryContext");
+            this.view3d.setState(this.store.state);
+          }
+        }
+      } catch {
+        // hypsometry fallback
+      }
+    })();
     // OSM building context. When avoidance is on the FIRST search must
     // already see the mask -- await the fetch before generating.
     const wantAvoid = this.store.state.avoidBuildings !== "off";
@@ -590,12 +610,32 @@ export class App {
       );
       const siteRef = { lat: site.lat, lon: site.lon, radiusMeters: site.radiusMeters };
       this.store.set(
-        { terrain: fine, terrainContext: this.scoutGrid, buildings: null, site: siteRef },
+        { terrain: fine, terrainContext: this.scoutGrid, buildings: null, site: siteRef, imagery: null },
         "terrain",
         "terrainContext",
         "buildings",
         "site",
+        "imagery",
       );
+      void (async () => {
+        try {
+          const { fetchImageryDrape } = await import("./imagery");
+          const drape = await fetchImageryDrape(fine);
+          if (drape && this.store.state.terrain === fine) {
+            this.store.set({ imagery: drape }, "imagery");
+            this.view3d.setState(this.store.state);
+          }
+          if (this.scoutGrid) {
+            const cdrape = await fetchImageryDrape(this.scoutGrid, 14);
+            if (cdrape && this.store.state.terrainContext === this.scoutGrid) {
+              this.store.set({ imageryContext: cdrape }, "imageryContext");
+              this.view3d.setState(this.store.state);
+            }
+          }
+        } catch {
+          // fine
+        }
+      })();
       this.setView("2d");
       const wantAvoid = this.store.state.avoidBuildings !== "off";
       void (async () => {

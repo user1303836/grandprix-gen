@@ -307,6 +307,13 @@ export class View3D {
     this.setupWeatherControl();
     this.setupCamControl();
     this.setupSeasonControl();
+    // imagery attribution (required when satellite drape is shown)
+    const attrib = document.createElement("div");
+    attrib.className = "imagery-attrib";
+    attrib.textContent = "Imagery \u00a9 Esri \u2014 Source: Esri, Maxar, Earthstar Geographics";
+    attrib.style.display = "none";
+    this.container.appendChild(attrib);
+    this.attribEl = attrib;
     this.cars = [
       { group: buildCar(0x2a52c8), s: 0, factor: 1 },
       { group: buildCar(0xc83a2a), s: 0.4, factor: 1.045 },
@@ -398,6 +405,7 @@ export class View3D {
   setVisible(v: boolean): void {
     this.visible = v;
     if (this.fitBtn) this.fitBtn.style.display = v ? "block" : "none";
+    if (this.attribEl) this.attribEl.style.display = v && this.state?.imagery && this.state.showSatellite ? "block" : "none";
     if (this.dayControl) this.dayControl.style.display = v ? "flex" : "none";
     if (this.weatherControl) this.weatherControl.style.display = v ? "flex" : "none";
     if (this.seasonControl) this.seasonControl.style.display = v ? "flex" : "none";
@@ -409,6 +417,7 @@ export class View3D {
   }
 
   private fitBtn: HTMLButtonElement | null = null;
+  private attribEl: HTMLDivElement | null = null;
 
   private visible = false;
   private needsRebuild = false;
@@ -475,7 +484,8 @@ export class View3D {
         track.samples.filter((_, i) => !track.carveMask || track.carveMask[i] === 1),
       );
       const holeTest = (x: number, y: number) => holeProx.nearest(x, y, 11) !== null;
-      const siteMesh = this.terrainMesh(g, carve, maxSide, 0, holeTest);
+      const drape = state.showSatellite ? state.imagery : null;
+      const siteMesh = this.terrainMesh(g, carve, maxSide, 0, holeTest, drape);
       siteMesh.receiveShadow = true;
       this.trackGroup.add(siteMesh);
       // coarse surrounding context -- carved identically, otherwise its
@@ -483,7 +493,8 @@ export class View3D {
       if (state.terrainContext) {
         const ctx = state.terrainContext;
         const ctxCarve = carveSampler(ctx, track.samples, track.carveMask, 40, 120, track.carveInner);
-        const ctxMesh = this.terrainMesh(ctx, (x, y) => ctxCarve(x, y), 200, 0);
+        const ctxDrape = state.showSatellite ? state.imageryContext : null;
+        const ctxMesh = this.terrainMesh(ctx, (x, y) => ctxCarve(x, y), 200, 0, null, ctxDrape);
         ctxMesh.position.y = -1.5; // site mesh wins the overlap
         ctxMesh.receiveShadow = true;
         this.trackGroup.add(ctxMesh);
@@ -1133,6 +1144,8 @@ export class View3D {
      * (the road/structures own the corridor; bilinear terrain can leak
      * over a narrow carved bench) */
     holeProximity: ((x: number, y: number) => boolean) | null = null,
+    /** satellite drape (canvas + local bounds) */
+    drape: import("./imagery").ImageryDrape | null = null,
   ): Mesh {
     const strideT = Math.max(1, Math.floor(Math.max(grid.width, grid.height) / maxSide));
     const nx = Math.max(2, Math.floor((grid.width - 1) / strideT));
@@ -1177,7 +1190,7 @@ export class View3D {
       }
       gm.indices = new Uint32Array(kept);
     }
-    return this.coloredGridMesh(gm.positions, gm.indices, grid);
+    return this.coloredGridMesh(gm.positions, gm.indices, grid, drape);
   }
 
   private gridMesh(positions: Float32Array, indices: Uint32Array, color: number, water = false): Mesh {
@@ -1203,7 +1216,7 @@ export class View3D {
   }
 
   /** Grid mesh with per-vertex hypsometric + hillshade coloring. */
-  private coloredGridMesh(positions: Float32Array, indices: Uint32Array, grid: TerrainGrid): Mesh {
+  private coloredGridMesh(positions: Float32Array, indices: Uint32Array, grid: TerrainGrid, drape: import("./imagery").ImageryDrape | null = null): Mesh {
     const nVerts = positions.length / 3;
     const pos = new Float32Array(positions.length);
     const colors = new Float32Array(nVerts * 3);
@@ -1260,11 +1273,20 @@ export class View3D {
       colors[vi + 1] = g * vmod;
       colors[vi + 2] = b * vmod;
     }
-    // world-space uvs so the grass detail tiles every ~34 m
+    // uvs: drape-accurate when satellite is available, else grass tiling
     const uvs = new Float32Array(nVerts * 2);
     for (let i = 0; i < positions.length; i += 3) {
-      uvs[(i / 3) * 2] = positions[i] / 57;
-      uvs[(i / 3) * 2 + 1] = positions[i + 1] / 57;
+      if (drape) {
+        uvs[(i / 3) * 2] = (positions[i] - drape.minX) / drape.spanX;
+        uvs[(i / 3) * 2 + 1] = (drape.minY + drape.spanY - positions[i + 1]) / drape.spanY;
+      } else {
+        uvs[(i / 3) * 2] = positions[i] / 57;
+        uvs[(i / 3) * 2 + 1] = positions[i + 1] / 57;
+      }
+    }
+    if (drape) {
+      // satellite reads clean: neutral vertex colors
+      for (let i = 0; i < colors.length; i++) colors[i] = 1;
     }
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(pos, 3));
@@ -1273,8 +1295,16 @@ export class View3D {
     geo.setIndex(new BufferAttribute(indices, 1));
     geo.computeVertexNormals();
     const mat = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: DoubleSide });
-    // grass detail breaks up the hypsometric flat shading up close
-    mat.map = this.grassTex;
+    if (drape) {
+      const tex = new CanvasTexture(drape.canvas);
+      tex.colorSpace = SRGBColorSpace;
+      tex.anisotropy = 4;
+      tex.flipY = false;
+      mat.map = tex;
+    } else {
+      // grass detail breaks up the hypsometric flat shading up close
+      mat.map = this.grassTex;
+    }
     const m = new Mesh(geo, mat);
     m.castShadow = true;
     return m;
