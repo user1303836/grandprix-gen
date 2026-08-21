@@ -1307,12 +1307,16 @@ export class View3D {
   }
 
   /** Per-frame label upkeep: distance fade + roughly constant screen size. */
-  private updateLabels(): void {
+  private labelFade = 1;
+  private updateLabels(dt = 0.016): void {
     const span = this.state?.track ? estimateSpan(this.state.track) : 2000;
+    // drive view: labels stay out of the way (the HUD calls features itself)
+    const target = this.driveActive ? 0.18 : 1;
+    this.labelFade += (target - this.labelFade) * Math.min(1, dt * 5);
     for (const { sprite } of this.labelSprites) {
       const d = this.camera.position.distanceTo(sprite.position);
       const mat = sprite.material as SpriteMaterial;
-      mat.opacity = Math.max(0, Math.min(1, 1.25 - d / (span * 1.1)));
+      mat.opacity = this.labelFade * Math.max(0, Math.min(1, 1.25 - d / (span * 1.1)));
       const w = Math.max(14, Math.min(52, d * 0.045));
       const aspect = sprite.scale.x / Math.max(1e-6, sprite.scale.y);
       sprite.scale.set(w * aspect, w, 1);
@@ -1369,6 +1373,7 @@ export class View3D {
         this.camera.position.y += Math.sin(tSh * 51.7 + 1.3) * shakeAmp * 0.35;
         this.camera.position.z += Math.sin(tSh * 43.1 + 2.9) * shakeAmp * 0.5;
       }
+      this.updateLabels(dt);
       this.hud.update(state, this.driveS, v, dt);
       if (this.headlight) {
         this.headlight.intensity = SKY_PRESETS[this.dayTime].floodlights ? 260 : 120;
@@ -1383,7 +1388,7 @@ export class View3D {
       }
       this.controls.enabled = true;
       this.controls.update();
-      this.updateLabels();
+      this.updateLabels(dt);
       this.updateHover(performance.now());
       this.updateFloodlights();
     }

@@ -113,6 +113,34 @@ cross-slope, earthwork (with a superlinear penalty on giant fills),
 contour-following, and building overlap (OSM footprints; soft cost or hard
 rejection).
 
+### Rendering & atmosphere
+
+The 3D view is built to be looked at, not just inspected:
+
+- **Post pipeline**: ACES filmic tone mapping, subtle bloom, SMAA, vignette.
+- **Stylized sky dome** (custom shader): saturated gradients, sun disk +
+  halo, drifting fbm clouds, twinkling star field + moon at night.
+- **Time of day**: noon / golden hour / dusk / night presets; night lights
+  the circuit with floodlight poles (pooled real lights follow the camera).
+- **Weather**: rain mode -- wet asphalt (roughness lerps down, metalness
+  up), slate overcast, close fog, camera-following rain streaks.
+- **Surface detail**: racing-line rubber darkening (outside-in-out through
+  corners), skid patches at braking entries, asphalt speckle, grass blade
+  and gravel textures, castellated aggressive/sausage kerbs.
+- **Trackside**: distance boards (150/100/50) at corner entries, seeded
+  sponsor billboards, start gantry + painted grid slots, grandstands with
+  colored seats, marshal posts, pit lane with tapered merge.
+- **Nature**: two tree species with trunks (conifers take the high
+  ground), animated ripple water with sun glint, drifting cloud shadows.
+- **Drive mode**: HUD (speed/gear/rpm, pedal trace, lap timer, mini map,
+  feature flash), FOV kick at speed, roughness-scaled camera shake
+  (heritage circuits ride genuinely rough), headlight in the dark.
+- **CINEMA** button for an auto-orbiting aerial shot, and a camera button
+  that saves the current frame as PNG.
+- The **2D map** is a live schematic: speed-heat ribbon (red apices,
+  green straights), direction chevrons, feature chips + legend, sector
+  zone halos, drop shadow, animated lap dot, station tooltip.
+
 ## Architecture
 
 ```
