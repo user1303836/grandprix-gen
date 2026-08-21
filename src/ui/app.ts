@@ -73,6 +73,11 @@ export class App {
       onSave: () => this.save(),
       onLoad: (file) => void this.load(file),
       canBreed: () => this.store.state.candidatesSelected.size >= 2,
+      onCinema: () => {
+        this.view3d.toggleCinema();
+        if (this.store.state.view !== "3d") this.setView("3d");
+      },
+      onCapture: () => this.view3d.captureScreenshot(),
     });
     shell.append(this.toolbarRef.root);
 

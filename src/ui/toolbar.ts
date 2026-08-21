@@ -17,6 +17,8 @@ export interface ToolbarCallbacks {
   onSave: () => void;
   onLoad: (file: File) => void;
   canBreed: () => boolean;
+  onCinema: () => void;
+  onCapture: () => void;
 }
 
 const EXPORT_ITEMS: [string, string, string][] = [
@@ -89,6 +91,16 @@ export function buildToolbar(
     tabs.append(b);
   }
   bar.append(tabs);
+
+  // cinema orbit + screenshot capture
+  const cinemaBtn = el("button", { textContent: "CINEMA", title: "cinematic auto-orbit" });
+  cinemaBtn.addEventListener("click", () => {
+    cb.onCinema();
+    cinemaBtn.classList.toggle("active");
+  });
+  const captureBtn = el("button", { textContent: "\u{1F4F7}", title: "save PNG of the current view" });
+  captureBtn.addEventListener("click", () => cb.onCapture());
+  bar.append(cinemaBtn, captureBtn);
 
   // spacer
   bar.append(el("div", { style: "flex:1" }));

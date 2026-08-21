@@ -510,6 +510,16 @@ export class View3D {
     }
   }
 
+  /** Capture the current render as a PNG download. */
+  captureScreenshot(): void {
+    this.composer.render();
+    const url = this.renderer.domElement.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `grandprix-gen-${this.dayTime}-${Date.now() % 100000}.png`;
+    a.click();
+  }
+
   /** Public: the floating "fit view" button. */
   resetView(): void {
     if (!this.state?.track) return;
@@ -574,6 +584,14 @@ export class View3D {
     wrap.style.display = "none";
     this.container.appendChild(wrap);
     this.dayControl = wrap;
+  }
+
+  /** Cinematic auto-orbit: slow aerial dolly around the circuit. */
+  cinemaMode = false;
+  toggleCinema(): void {
+    this.cinemaMode = !this.cinemaMode;
+    this.controls.autoRotate = this.cinemaMode;
+    this.controls.autoRotateSpeed = 0.55;
   }
 
   private weatherControl: HTMLDivElement | null = null;
