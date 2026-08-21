@@ -17,6 +17,7 @@ import {
   DoubleSide,
 } from "three";
 import type { Track } from "../core/types";
+import { FeatureColors } from "../core/character";
 
 /** Shared wind time uniform (the view drives it every frame). */
 export const windUniform = { value: 0 };
@@ -418,6 +419,49 @@ export function buildFurniture(track: Track): Group {
         }
         k++;
       }
+    }
+  }
+
+  // ---------- corner name boards at named features -----------------------------
+  {
+    for (const f of track.features ?? []) {
+      // named-feature sign, like real circuits post at famous corners
+      const cv = document.createElement("canvas");
+      cv.width = 512;
+      cv.height = 128;
+      const ctx = cv.getContext("2d")!;
+      ctx.fillStyle = "#14161c";
+      ctx.fillRect(0, 0, 512, 128);
+      ctx.fillStyle = FeatureColors[f.kind] ?? "#ffb454";
+      ctx.fillRect(0, 0, 18, 128);
+      ctx.fillStyle = "#f2f3f5";
+      ctx.font = "italic 700 46px Georgia, serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      const name = f.name.length > 22 ? f.name.slice(0, 21) + "\u2026" : f.name;
+      ctx.fillText(name, 40, 66);
+      const tex = new CanvasTexture(cv);
+      tex.colorSpace = SRGBColorSpace;
+      tex.anisotropy = 4;
+      const sMid = ((f.sStart + f.sEnd) / 2 + L) % L;
+      const i = Math.round(sMid / ds) % n;
+      const smp = track.samples[i];
+      // outside of the corner if applicable, else right-hand side
+      let side = 1;
+      if (smp.kappa < -0.001) side = 1;
+      else if (smp.kappa > 0.001) side = -1;
+      const { nx, ny, off } = offsetOf(track, i, side, 7.5);
+      const px = smp.x + nx * off;
+      const py = smp.y + ny * off;
+      const pz = smp.z - off * Math.sin(smp.bank);
+      const post2 = new Mesh(new CylinderGeometry(0.07, 0.09, 2.6, 6), postMat);
+      post2.position.set(px, pz + 1.3, -py);
+      group.add(post2);
+      const sign = new Mesh(new BoxGeometry(3.4, 1.0, 0.08), new MeshStandardMaterial({ map: tex, roughness: 0.7 }));
+      sign.position.set(px, pz + 2.9, -py);
+      sign.rotation.y = -smp.heading + (side > 0 ? Math.PI : 0);
+      sign.castShadow = true;
+      group.add(sign);
     }
   }
 
