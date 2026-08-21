@@ -19,6 +19,7 @@ export interface ToolbarCallbacks {
   canBreed: () => boolean;
   onCinema: () => void;
   onCapture: () => void;
+  onRecord: () => void;
 }
 
 const EXPORT_ITEMS: [string, string, string][] = [
@@ -100,7 +101,9 @@ export function buildToolbar(
   });
   const captureBtn = el("button", { textContent: "\u{1F4F7}", title: "save PNG of the current view" });
   captureBtn.addEventListener("click", () => cb.onCapture());
-  bar.append(cinemaBtn, captureBtn);
+  const recBtn = el("button", { textContent: "REC", title: "record 8 s of video (WebM)" });
+  recBtn.addEventListener("click", () => cb.onRecord());
+  bar.append(cinemaBtn, captureBtn, recBtn);
 
   // spacer
   bar.append(el("div", { style: "flex:1" }));

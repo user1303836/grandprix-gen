@@ -326,6 +326,7 @@ export class View2D {
     if (state.showCorners) this.drawCornerNumbers(track);
     this.drawFeatureLabels(track);
     this.drawLegend(track);
+    this.drawPitLane(track);
     this.drawSpeedHeat(track);
     this.drawDirectionArrows(track);
     this.drawLapDot(track);
@@ -764,6 +765,38 @@ export class View2D {
       ctx.arc(x, y, 2.5 * dpr, 0, Math.PI * 2);
       ctx.fill();
       sAcc += len;
+    }
+  }
+
+  /** Pit lane ribbon (parallel on the right of the main straight). */
+  private drawPitLane(track: Track): void {
+    const f = track.features?.find((x) => x.kind === "pit-lane");
+    if (!f) return;
+    const ctx = this.ctx;
+    const n = track.samples.length;
+    const i0 = Math.round(f.sStart / track.ds) % n;
+    const i1 = Math.round(f.sEnd / track.ds) % n;
+    const len = ((i1 - i0 + n) % n) || 1;
+    ctx.strokeStyle = "#3a3d44";
+    ctx.lineCap = "round";
+    const laneW = 7;
+    for (let k = 0; k < len; k += 2) {
+      const a = track.samples[(i0 + k) % n];
+      const b = track.samples[(i0 + k + 2) % n];
+      const ease = (x: number) => x * x * (3 - 2 * x);
+      const tA = Math.min(1, Math.min(k, len - k) / (len * 0.15));
+      const tB = Math.min(1, Math.min(k + 2, len - k - 2) / (len * 0.15));
+      const offA = a.width / 2 + 2.2 + laneW * (1 - ease(tA)) + laneW * ease(tA) * 0.5;
+      const offB = b.width / 2 + 2.2 + laneW * (1 - ease(tB)) + laneW * ease(tB) * 0.5;
+      const nxa = -Math.sin(a.heading);
+      const nya = Math.cos(a.heading);
+      const nxb = -Math.sin(b.heading);
+      const nyb = Math.cos(b.heading);
+      ctx.lineWidth = Math.max(1.2, laneW * ease(tA) * this.scale);
+      ctx.beginPath();
+      ctx.moveTo(this.wx(a.x - nxa * offA), this.wy(a.y - nya * offA));
+      ctx.lineTo(this.wx(b.x - nxb * offB), this.wy(b.y - nyb * offB));
+      ctx.stroke();
     }
   }
 

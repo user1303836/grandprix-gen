@@ -78,6 +78,10 @@ export class App {
         if (this.store.state.view !== "3d") this.setView("3d");
       },
       onCapture: () => this.view3d.captureScreenshot(),
+      onRecord: () => {
+        if (this.store.state.view !== "3d") this.setView("3d");
+        this.view3d.recordVideo(8);
+      },
     });
     shell.append(this.toolbarRef.root);
 

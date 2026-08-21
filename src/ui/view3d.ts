@@ -531,6 +531,32 @@ export class View3D {
     }
   }
 
+  /** Record `seconds` of the current view as a WebM download. */
+  recordVideo(seconds = 8): boolean {
+    const stream = this.renderer.domElement.captureStream(60);
+    const rec = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp9", videoBitsPerSecond: 14_000_000 });
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    rec.onstop = () => {
+      const blob = new Blob(chunks, { type: "video/webm" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `grandprix-gen-${this.dayTime}-${Date.now() % 100000}.webm`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    };
+    try {
+      rec.start();
+      setTimeout(() => rec.stop(), seconds * 1000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Capture the current render as a PNG download. */
   captureScreenshot(): void {
     this.composer.render();
