@@ -7,6 +7,7 @@
  */
 
 import {
+  AdditiveBlending,
   AmbientLight,
   BufferAttribute,
   BufferGeometry,
@@ -19,6 +20,7 @@ import {
   InstancedMesh,
   Matrix4,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   Object3D,
   PCFSoftShadowMap,
@@ -38,6 +40,7 @@ import {
   CylinderGeometry,
   BoxGeometry,
   IcosahedronGeometry,
+  PlaneGeometry,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -48,7 +51,7 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
 import { makeAsphaltTexture, makeGrassTexture, makeGravelTexture } from "./textures";
-import { buildFurniture } from "./furniture";
+import { buildFurniture, windUniform } from "./furniture";
 import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
 import { RainSystem } from "./rain";
@@ -463,6 +466,12 @@ export class View3D {
         // where the corridor flattens the ground
         const carved = carveSampler(state.terrain, track.samples, track.carveMask, 40, 120, track.carveInner);
         this.trackGroup.add(this.buildingsMesh(state.buildings, carved));
+        const win = this.buildingWindowsMesh(state.buildings, carved);
+        if (win) {
+          win.visible = SKY_PRESETS[this.dayTime].floodlights;
+          this.windowsMesh = win;
+          this.trackGroup.add(win);
+        }
       }
     } else if (track) {
       const span = estimateSpan(track) * 9;
@@ -652,6 +661,7 @@ export class View3D {
     // floodlights (only sensible with a track)
     this.rebuildFloodlights();
     this.updateEnvironment();
+    if (this.windowsMesh) this.windowsMesh.visible = p.floodlights;
   }
 
   private sunDirection(): Vector3 {
@@ -803,6 +813,25 @@ export class View3D {
     poles.instanceMatrix.needsUpdate = true;
     heads.instanceMatrix.needsUpdate = true;
     poles.castShadow = true;
+    // volumetric-ish light shafts: additive translucent cones under each head
+    const shaftGeo = new ConeGeometry(5.2, 13.5, 12, 1, true);
+    shaftGeo.translate(0, -6.75, 0);
+    const shaftMat = new MeshBasicMaterial({
+      color: 0xffeecc,
+      transparent: true,
+      opacity: 0.055,
+      blending: AdditiveBlending,
+      depthWrite: false,
+      side: DoubleSide,
+    });
+    const shafts = new InstancedMesh(shaftGeo, shaftMat, positions.length);
+    positions.forEach((p2, i) => {
+      m4.makeTranslation(p2.x, p2.z + 13.6, -p2.y);
+      shafts.setMatrixAt(i, m4);
+    });
+    shafts.instanceMatrix.needsUpdate = true;
+    shafts.renderOrder = 40;
+    this.floodGroup.add(shafts);
     this.scene.add(this.floodGroup);
     // pool of real lights, repositioned to the poles nearest the camera
     const poolSize = 5;
@@ -1229,6 +1258,47 @@ export class View3D {
     return m;
   }
 
+  /** Warm lit windows sprinkled on building faces (visible at night). */
+  private buildingWindowsMesh(buildings: OsmBuilding[], elevAt: (x: number, y: number) => number): Mesh | null {
+    const winGeo = new PlaneGeometry(0.9, 0.7);
+    const winMat = new MeshBasicMaterial({
+      color: 0xffca7a,
+      transparent: true,
+      opacity: 0.95,
+      blending: AdditiveBlending,
+      depthWrite: false,
+    });
+    const mats: Matrix4[] = [];
+    const rng = new Rng(0xb1b1);
+    for (const b of buildings) {
+      const nWin = rng.int(0, 3);
+      for (let k = 0; k < nWin; k++) {
+        const ring = b.footprint;
+        const ei = rng.int(0, ring.length - 2);
+        const [x0, y0] = ring[ei];
+        const [x1, y1] = ring[ei + 1];
+        const t = rng.next();
+        const x = x0 + (x1 - x0) * t;
+        const y = y0 + (y1 - y0) * t;
+        const base = elevAt(x, y);
+        const z = (Number.isFinite(base) ? base : 0) - 0.3 + b.height * (0.35 + rng.next() * 0.5);
+        const ang = Math.atan2(y1 - y0, x1 - x0) + Math.PI / 2;
+        const m4 = new Matrix4().makeRotationY(-ang);
+        m4.setPosition(x, z, -y);
+        mats.push(m4);
+        if (mats.length > 900) break;
+      }
+      if (mats.length > 900) break;
+    }
+    if (mats.length === 0) return null;
+    const inst = new InstancedMesh(winGeo, winMat, mats.length);
+    mats.forEach((m4, i) => inst.setMatrixAt(i, m4));
+    inst.instanceMatrix.needsUpdate = true;
+    inst.name = "building-windows";
+    inst.renderOrder = 30;
+    return inst;
+  }
+
   // ---------------------------------------------------- structures
   private addStructureMeshes(track: Track, terrain: TerrainGrid | null): void {
     if (!this.trackGroup) return;
@@ -1287,6 +1357,7 @@ export class View3D {
   }
 
   private headlight: PointLight | null = null;
+  private windowsMesh: Mesh | null = null;
   private baseFov = 55;
   private driveActivePrev = false;
   private orbitCarS = 0;
@@ -1580,6 +1651,7 @@ export class View3D {
     this.sky.setTime(tNow);
     this.cloudShadows.setTime(tNow);
     this.windTime.value = tNow;
+    windUniform.value = tNow;
     this.updateWetness(dt);
     this.rain.update(dt, this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.trackGroup?.traverse((o) => {

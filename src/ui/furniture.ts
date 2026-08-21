@@ -18,6 +18,9 @@ import {
 } from "three";
 import type { Track } from "../core/types";
 
+/** Shared wind time uniform (the view drives it every frame). */
+export const windUniform = { value: 0 };
+
 const BRAND_WORDS_A = ["VULCAN", "TORQUE", "APEX", "REDLINE", "STRADA", "KOMET", "ZEPHYR", "HAYATE", "MONZA", "VECTOR", "PRIME", "ATLAS"];
 const BRAND_WORDS_B = ["OIL", "TYRES", "BRAKES", "FUELS", "MOTORS", "LUBES", "RACING", "PARTS", "ENERGY", "TOOLS", "SYSTEMS", "WORKS"];
 const BRAND_COLORS = ["#c8322b", "#20447e", "#e8a018", "#1a7a4a", "#7a2a8a", "#c85a10", "#2a8a9a", "#b8b4ac"];
@@ -251,6 +254,49 @@ export function buildFurniture(track: Track): Group {
     line.rotation.x = -Math.PI / 2;
     line.rotation.z = -smp.heading;
     group.add(line);
+  }
+
+  // ---------- waving checkered flag on a pole at start/finish --------------
+  {
+    const cv = document.createElement("canvas");
+    cv.width = 64;
+    cv.height = 64;
+    const ctx = cv.getContext("2d")!;
+    for (let x = 0; x < 8; x++) {
+      for (let y = 0; y < 8; y++) {
+        ctx.fillStyle = (x + y) % 2 === 0 ? "#14161a" : "#f2f0ea";
+        ctx.fillRect(x * 8, y * 8, 8, 8);
+      }
+    }
+    const flagTex = new CanvasTexture(cv);
+    flagTex.colorSpace = SRGBColorSpace;
+    const smp0 = track.samples[0];
+    const { nx, ny, off } = offsetOf(track, 0, -1, 3.2);
+    const fx = smp0.x + nx * off;
+    const fy = smp0.y + ny * off;
+    const pole = new Mesh(new CylinderGeometry(0.06, 0.08, 9.5, 6), postMat);
+    pole.position.set(fx, smp0.z + 4.75, -fy);
+    pole.castShadow = true;
+    group.add(pole);
+    const flagMat = new MeshStandardMaterial({ map: flagTex, side: DoubleSide, roughness: 0.9 });
+    const flagGeo = new PlaneGeometry(2.6, 1.7, 12, 6);
+    const flag = new Mesh(flagGeo, flagMat);
+    flag.position.set(fx + 1.32 * Math.cos(smp0.heading), smp0.z + 8.5, -fy + 1.32 * Math.sin(smp0.heading));
+    flag.rotation.y = -smp0.heading;
+    // wave via vertex displacement (shared windTime uniform, set by view)
+    flagMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uTime = windUniform;
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nuniform float uTime;")
+        .replace(
+          "#include <begin_vertex>",
+          `#include <begin_vertex>
+          float wamp = max(0.0, position.x + 1.3) / 2.6;
+          transformed.z += sin(uTime * 5.2 + position.x * 3.1) * 0.28 * wamp;
+          transformed.y += sin(uTime * 3.7 + position.x * 2.2) * 0.1 * wamp;`,
+        );
+    };
+    group.add(flag);
   }
 
   // ---------- start/finish gantry ------------------------------------------
