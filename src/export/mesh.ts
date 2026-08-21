@@ -252,8 +252,17 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       const ly = Math.cos(s.heading) * off * cosB;
       const lz = -off * sinB;
       let extraZ = 0;
-      if (c === 1) extraZ = KERB_LIFT[kL] ?? 0;
-      if (c === 6) extraZ = KERB_LIFT[kR] ?? 0;
+      // aggressive/sausage kerbs are castellated: alternating tall blocks
+      if (c === 1) {
+        let lift = KERB_LIFT[kL] ?? 0;
+        if ((kL === KerbKind.Aggressive || kL === KerbKind.Sausage) && r % 2 === 1) lift *= 0.4;
+        extraZ = lift;
+      }
+      if (c === 6) {
+        let lift = KERB_LIFT[kR] ?? 0;
+        if ((kR === KerbKind.Aggressive || kR === KerbKind.Sausage) && r % 2 === 1) lift *= 0.4;
+        extraZ = lift;
+      }
       if (c === 2 || c === 5) extraZ = 0.015;
       if (c === 0 || c === 7) extraZ = -0.05;
       // micro bumps only on the drivable bands (asphalt + kerbs), not runoff
