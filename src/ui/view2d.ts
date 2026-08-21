@@ -360,9 +360,20 @@ export class View2D {
     if (state.terrainContext && state.showTerrainHeat) {
       this.drawGridBackdrop(state.terrainContext, 0.5);
     }
-    // detailed site terrain
+    // detailed site terrain: satellite drape when available, else hypsometry
     if (state.terrain && state.showTerrainHeat) {
-      this.drawGridBackdrop(state.terrain, 1);
+      const drape = state.showSatellite ? state.imagery : null;
+      if (drape) {
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.globalAlpha = 0.92;
+        const x0 = this.wx(drape.minX);
+        const y0 = this.wy(drape.minY + drape.spanY);
+        ctx.drawImage(drape.canvas, x0, y0, drape.spanX * this.scale, drape.spanY * this.scale);
+        ctx.restore();
+      } else {
+        this.drawGridBackdrop(state.terrain, 1);
+      }
     }
 
     // building footprints

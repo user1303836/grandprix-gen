@@ -921,6 +921,11 @@ export class View3D {
           if (o.name === "buildings" || o.name.startsWith("structure")) {
             m.roughness = (m.userData.dryRough ?? (m.userData.dryRough = m.roughness)) * (1 - wf * 0.4);
           }
+          // terrain soaks: slightly darker + tighter
+          if (o.geometry?.attributes?.color && !o.name.startsWith("structure") && !o.name.startsWith("barrier")) {
+            m.roughness = (m.userData.dryRough ?? (m.userData.dryRough = m.roughness)) * (1 - wf * 0.25);
+            m.color.setScalar(1 - wf * 0.16);
+          }
         }
       });
       // terrain darkens when soaked
