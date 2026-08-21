@@ -326,6 +326,9 @@ export class View2D {
     if (state.showCorners) this.drawCornerNumbers(track);
     this.drawFeatureLabels(track);
     this.drawLegend(track);
+    this.drawSpeedHeat(track);
+    this.drawDirectionArrows(track);
+    this.drawLapDot(track);
     this.drawStartFinish(track);
     if (state.showControlPoints) this.drawDebug(track);
     if (this.hoverS !== null) this.drawHoverMarker(track, this.hoverS, dpr);
@@ -461,6 +464,24 @@ export class View2D {
     const ctx = this.ctx;
     const s = track.samples;
     const n = s.length;
+
+    // soft drop shadow under the ribbon for depth
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.5)";
+    ctx.shadowBlur = 14 * (window.devicePixelRatio || 1);
+    ctx.shadowOffsetX = 4 * (window.devicePixelRatio || 1);
+    ctx.shadowOffsetY = 6 * (window.devicePixelRatio || 1);
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const p = s[i % n];
+      if (i === 0) ctx.moveTo(this.wx(p.x), this.wy(p.y));
+      else ctx.lineTo(this.wx(p.x), this.wy(p.y));
+    }
+    ctx.closePath();
+    ctx.strokeStyle = "rgba(0,0,0,0.4)";
+    ctx.lineWidth = Math.max(1, (s[0].width + 10) * this.scale);
+    ctx.stroke();
+    ctx.restore();
 
     // runoff / shoulder halo beneath the asphalt
     ctx.beginPath();
@@ -744,6 +765,95 @@ export class View2D {
       ctx.fill();
       sAcc += len;
     }
+  }
+
+  /** Speed heat: thin colored line along the right edge by predicted speed. */
+  private drawSpeedHeat(track: Track): void {
+    const ctx = this.ctx;
+    const s = track.samples;
+    const n = s.length;
+    if (!Number.isFinite(s[0].speed)) return;
+    let vMin = Infinity;
+    let vMax = 0;
+    for (const p of s) {
+      if (p.speed < vMin) vMin = p.speed;
+      if (p.speed > vMax) vMax = p.speed;
+    }
+    const span = Math.max(1, vMax - vMin);
+    const step = Math.max(1, Math.round(3 / track.ds));
+    ctx.lineCap = "round";
+    for (let i = 0; i < n; i += step) {
+      const a = s[i];
+      const b = s[(i + step) % n];
+      const t = (a.speed - vMin) / span;
+      // slow=red, mid=yellow, fast=green-cyan
+      const hue = t * 130;
+      ctx.strokeStyle = `hsl(${hue}, 85%, 55%)`;
+      ctx.lineWidth = Math.max(1.4, 2.2 * (window.devicePixelRatio || 1) * this.scale * 0.9);
+      const nx = -Math.sin(a.heading);
+      const ny = Math.cos(a.heading);
+      const off = a.width / 2 + 1.2;
+      const nx2 = -Math.sin(b.heading);
+      const ny2 = Math.cos(b.heading);
+      const off2 = b.width / 2 + 1.2;
+      ctx.beginPath();
+      ctx.moveTo(this.wx(a.x + nx * off), this.wy(a.y + ny * off));
+      ctx.lineTo(this.wx(b.x + nx2 * off2), this.wy(b.y + ny2 * off2));
+      ctx.stroke();
+    }
+  }
+
+  /** Driving-direction chevrons every ~150 m. */
+  private drawDirectionArrows(track: Track): void {
+    const ctx = this.ctx;
+    const s = track.samples;
+    const n = s.length;
+    const step = Math.max(1, Math.round(150 / track.ds));
+    const dpr = window.devicePixelRatio || 1;
+    ctx.fillStyle = "rgba(210,220,232,0.75)";
+    for (let i = Math.round(30 / track.ds); i < n; i += step) {
+      const p = s[i];
+      const x = this.wx(p.x);
+      const y = this.wy(p.y);
+      const h = p.heading;
+      const sz = Math.max(4, 5.5 * dpr * Math.min(1, this.scale));
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.atan2(Math.sin(h), Math.cos(h)) * 0 + h * 0); // heading already radians in plan
+      // plan heading h: dir = (cos h, sin h); canvas y is down-flipped by wy
+      ctx.restore();
+      const dx = Math.cos(h);
+      const dy = -Math.sin(h); // wy flips y
+      ctx.beginPath();
+      ctx.moveTo(x + dx * sz * 1.6, y + dy * sz * 1.6);
+      ctx.lineTo(x - dy * sz - dx * sz * 0.7, y + dx * sz - dy * sz * 0.7);
+      ctx.lineTo(x + dy * sz - dx * sz * 0.7, y - dx * sz - dy * sz * 0.7);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  /** Animated dot lapping the circuit at the predicted speed. */
+  private lapDotS = 0;
+  private lastLapDotT = 0;
+  private drawLapDot(track: Track): void {
+    const now = performance.now() / 1000;
+    const dt = Math.min(0.2, now - (this.lastLapDotT || now));
+    this.lastLapDotT = now;
+    const n = track.samples.length;
+    const i = Math.floor(this.lapDotS / track.ds) % n;
+    const v = Number.isFinite(track.samples[i].speed) ? track.samples[i].speed : 40;
+    this.lapDotS = (this.lapDotS + v * dt * 0.55) % track.length;
+    const p = track.samples[Math.floor(this.lapDotS / track.ds) % n];
+    const ctx = this.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.fillStyle = "#ffb454";
+    ctx.shadowColor = "rgba(255,180,84,0.8)";
+    ctx.shadowBlur = 8 * dpr;
+    ctx.beginPath();
+    ctx.arc(this.wx(p.x), this.wy(p.y), 4.5 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
   }
 
   /** Kilometer-scale zone halos under everything. */
