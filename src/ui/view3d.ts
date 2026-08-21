@@ -46,6 +46,7 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
+import { makeAsphaltTexture, makeGrassTexture, makeGravelTexture } from "./textures";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
@@ -73,7 +74,7 @@ import type { AppState } from "./state";
 import type { Track } from "../core/types";
 
 const PART_COLORS: Record<string, number> = {
-  asphalt: 0x35363b,
+  asphalt: 0x5a5d66,
   line: 0xf2f2f2,
   kerb: 0xd8d8d8,
   runoff: 0x7d7a66,
@@ -142,7 +143,7 @@ const SKY_STYLES: Record<DayTime, SkyStyle> = {
 
 const SKY_PRESETS: Record<DayTime, SkyPreset> = {
   noon: {
-    sunElevation: 52, sunAzimuth: 155, sunColor: 0xfff2dd, sunIntensity: 2.3,
+    sunElevation: 52, sunAzimuth: 155, sunColor: 0xfff2dd, sunIntensity: 2.6,
     ambientColor: 0xb4b8bc, ambientIntensity: 0.55,
     turbidity: 7, rayleigh: 2.0, mieCoefficient: 0.004, mieDirectionalG: 0.8,
     fogColor: 0x9db4c8, fogNearK: 3.6, fogFarK: 13, exposure: 1.05, bloom: 0.16,
@@ -183,6 +184,9 @@ export class View3D {
   private state: AppState | null = null;
   private disposed = false;
   private stripedCurbTex: CanvasTexture;
+  private asphaltTex = makeAsphaltTexture();
+  private grassTex = makeGrassTexture();
+  private gravelTex = makeGravelTexture();
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
   private sky: SkyDome;
@@ -256,7 +260,7 @@ export class View3D {
     this.composer.addPass(this.bloomPass);
     // vignette + subtle grain
     const vignettePass = new ShaderPass({
-      uniforms: { tDiffuse: { value: null }, strength: { value: 0.32 } },
+      uniforms: { tDiffuse: { value: null }, strength: { value: 0.22 } },
       vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
       fragmentShader:
         "uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv;" +
@@ -425,7 +429,11 @@ export class View3D {
     } else if (track) {
       const span = estimateSpan(track) * 2.4;
       const gm = buildGridMesh(() => -0.08, -span / 2, -span / 2, span / 2, span / 2, 2, 2);
-      const ground = this.gridMesh(gm.positions, gm.indices, 0x3d5530);
+      const ground = this.gridMesh(gm.positions, gm.indices, 0x51683c);
+      const gmat = ground.material as MeshStandardMaterial;
+      this.grassTex.repeat.set(span / 26, span / 26);
+      gmat.map = this.grassTex;
+      gmat.color.setHex(0x8a9a72);
       ground.receiveShadow = true;
       this.trackGroup.add(ground);
     }
@@ -669,12 +677,16 @@ export class View3D {
         : isRunoff && kindLabel
           ? (RUNOFF_COLORS[kindLabel] ?? 0x7d7a66)
           : (PART_COLORS[band] ?? 0x888888);
+    if (isAsphalt) {
+      this.asphaltTex.repeat.set(1, 3);
+    }
     const mat = new MeshStandardMaterial({
       color: new Color(baseColor),
-      roughness: isAsphalt ? 0.97 : isRunoff && kindLabel === "gravel" ? 1 : 0.85,
+      roughness: isAsphalt ? 0.94 : isRunoff && kindLabel === "gravel" ? 1 : 0.85,
       metalness: 0,
       side: DoubleSide,
       vertexColors: isAsphalt, // surface tint + mottle lives in vertex colors
+      map: isAsphalt ? this.asphaltTex : isRunoff && kindLabel === "gravel" ? this.gravelTex : null,
       polygonOffset: isLine,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -2,
@@ -843,12 +855,21 @@ export class View3D {
       colors[vi + 1] = g * vmod;
       colors[vi + 2] = b * vmod;
     }
+    // world-space uvs so the grass detail tiles every ~34 m
+    const uvs = new Float32Array(nVerts * 2);
+    for (let i = 0; i < positions.length; i += 3) {
+      uvs[(i / 3) * 2] = positions[i] / 34;
+      uvs[(i / 3) * 2 + 1] = positions[i + 1] / 34;
+    }
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(pos, 3));
     geo.setAttribute("color", new BufferAttribute(colors, 3));
+    geo.setAttribute("uv", new BufferAttribute(uvs, 2));
     geo.setIndex(new BufferAttribute(indices, 1));
     geo.computeVertexNormals();
     const mat = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side: DoubleSide });
+    // grass detail breaks up the hypsometric flat shading up close
+    mat.map = this.grassTex;
     const m = new Mesh(geo, mat);
     m.castShadow = true;
     return m;

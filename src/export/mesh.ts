@@ -152,6 +152,61 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
     return f * 0.045 * (0.3 + rough);
   };
 
+  // ---- racing-line rubber: a dark band that straightens the corners --------
+  // precompute the rubber line's lateral offset per station: outside before
+  // the apex, inside at the apex, outside at the exit (classic race line)
+  const rubberOff = new Float32Array(m);
+  const rubberAmt = new Float32Array(m).fill(0.35); // baseline highway polish
+  {
+    const corners = track.corners ?? [];
+    for (const c of corners) {
+      const iA = Math.round(c.sStart / track.ds) % n;
+      const iX = Math.round(c.sApex / track.ds) % n;
+      const iB = Math.round(c.sEnd / track.ds) % n;
+      const dir = c.direction === "L" ? 1 : -1; // left-positive offsets
+      const severity = Math.min(1, 90 / Math.max(18, c.minRadius));
+      const out = -dir * 0.52; // fraction of half width toward the outside
+      const inn = dir * 0.58; // toward the inside at the apex
+      const visit = (i0: number, i1: number, f0: number, f1: number) => {
+        const len = ((i1 - i0) % n + n) % n || 1;
+        let i = i0;
+        for (let k = 0; k <= len; k++) {
+          const ii = i % n;
+          const t = k / len;
+          rubberOff[ii] = (f0 + (f1 - f0) * t) * (halfL(ii) + halfR(ii)) * 0.5;
+          rubberAmt[ii] = Math.max(rubberAmt[ii], 0.35 + 0.55 * severity);
+          i++;
+        }
+      };
+      // approach (outside), entry->apex (cross to inside), apex->exit (back out)
+      const iAppr = (iA - Math.round(60 / track.ds) + n) % n;
+      visit(iAppr, iA, 0, out);
+      visit(iA, iX, out, inn);
+      visit(iX, iB, inn, out);
+      visit(iB, (iB + Math.round(40 / track.ds)) % n, out, 0);
+      // skid marks: extra dark patches on corner entry (heavy braking)
+      if (severity > 0.55) {
+        const s0 = (iA - Math.round(38 / track.ds) + n) % n;
+        const s1 = iA;
+        const len = ((s1 - s0) % n + n) % n || 1;
+        let i = s0;
+        for (let k = 0; k <= len; k++) {
+          const ii = i % n;
+          // skids sit slightly outside the rubber line
+          rubberOff[ii] = rubberOff[ii] * 0.85;
+          rubberAmt[ii] = Math.min(1, rubberAmt[ii] + 0.18 * (k / len));
+          i++;
+        }
+      }
+    }
+  }
+  const rubberShade = (off: number, i: number): number => {
+    // gaussian darkening around the rubber line
+    const d = off - rubberOff[i];
+    const g = Math.exp(-(d * d) / (2 * 1.15 * 1.15));
+    return 1 - g * 0.22 * rubberAmt[i];
+  };
+
   for (let r = 0; r < m; r++) {
     const si = idxList[r];
     const s = track.samples[si];
@@ -215,9 +270,10 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       // colors: asphalt band carries surface tint + mottle
       const ci = (r * cols + c) * 3;
       if (c === 3 || c === 4) {
-        colors[ci] = tint[0] * mot;
-        colors[ci + 1] = tint[1] * mot;
-        colors[ci + 2] = tint[2] * mot;
+        const rs = rubberShade(off, r);
+        colors[ci] = tint[0] * mot * rs;
+        colors[ci + 1] = tint[1] * mot * rs;
+        colors[ci + 2] = tint[2] * mot * rs;
       } else {
         colors[ci] = 1;
         colors[ci + 1] = 1;
