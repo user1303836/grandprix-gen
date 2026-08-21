@@ -52,6 +52,7 @@ import { buildFurniture } from "./furniture";
 import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
 import { RainSystem } from "./rain";
+import { buildCar } from "./car";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
@@ -205,6 +206,7 @@ export class View3D {
   private dayTime: DayTime = "noon";
   private weather: Weather = "dry";
   private rain = new RainSystem();
+  private car: Group;
   private wetFactor = 0; // 0 dry, 1 soaked (lerped)
   private hemi: AmbientLight;
 
@@ -256,6 +258,8 @@ export class View3D {
     this.hud = new DriveHUD(this.container);
     this.scene.add(this.rain.points);
     this.setupWeatherControl();
+    this.car = buildCar();
+    this.scene.add(this.car);
 
     this.hemi = new AmbientLight(0xb4b8bc, 0.55);
     this.scene.add(this.hemi);
@@ -1259,6 +1263,7 @@ export class View3D {
   private headlight: PointLight | null = null;
   private baseFov = 55;
   private driveActivePrev = false;
+  private orbitCarS = 0;
   private cloudShadows = new CloudShadows();
   private windTime = { value: 0 };
   private hud: DriveHUD;
@@ -1475,6 +1480,15 @@ export class View3D {
         this.scene.add(this.headlight);
       }
       const track = state.track;
+      // the car lives where the camera is (chase) or ahead (cockpit: hide)
+      {
+        const ci = Math.floor(this.driveS / track.ds) % track.samples.length;
+        const cp = sampleAt(track, this.driveS);
+        this.car.position.set(cp.x, cp.z + 0.02, -cp.y);
+        this.car.rotation.set(0, -cp.heading, 0);
+        this.car.visible = this.driveChase;
+        void ci;
+      }
       if (!Number.isFinite(this.driveS)) this.driveS = 0;
       const idx = Math.floor(this.driveS / track.ds) % track.samples.length;
       const v = Number.isFinite(track.samples[idx].speed) ? track.samples[idx].speed : 30;
@@ -1484,10 +1498,10 @@ export class View3D {
       const ahead = sampleAt(track, lookS);
       const h = this.driveCamHeight;
       if (this.driveChase) {
-        const backS = (this.driveS - 14 + track.length) % track.length;
+        const backS = (this.driveS - 19 + track.length) % track.length;
         const back = sampleAt(track, backS);
-        this.camera.position.set(back.x, back.z + 6.5, -back.y);
-        this.camera.lookAt(ahead.x, ahead.z + 1.5, -ahead.y);
+        this.camera.position.set(back.x, back.z + 7.6, -back.y);
+        this.camera.lookAt(ahead.x, ahead.z + 1.6, -ahead.y);
       } else {
         this.camera.position.set(here.x, here.z + h, -here.y);
         this.camera.lookAt(ahead.x, ahead.z + h * 0.6, -ahead.y);
@@ -1515,6 +1529,16 @@ export class View3D {
       this.updateFloodlights();
     } else {
       if (this.headlight) this.headlight.intensity = 0;
+      // the car keeps lapping in orbit view at a relaxed pace
+      if (state.track) {
+        this.orbitCarS = ((this.orbitCarS ?? 0) + dt * 52) % state.track.length;
+        const cp = sampleAt(state.track, this.orbitCarS);
+        this.car.position.set(cp.x, cp.z + 0.02, -cp.y);
+        this.car.rotation.set(0, -cp.heading, 0);
+        this.car.visible = true;
+        // banking: lean into the corner
+        this.car.rotation.z = -cp.bank * 0.85;
+      }
       if (this.camera.fov !== this.baseFov) {
         this.camera.fov += (this.baseFov - this.camera.fov) * Math.min(1, dt * 6);
         this.camera.updateProjectionMatrix();
