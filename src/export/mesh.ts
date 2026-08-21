@@ -280,9 +280,12 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       const ci = (r * cols + c) * 3;
       if (c === 3 || c === 4) {
         const rs = rubberShade(off, r);
-        colors[ci] = tint[0] * mot * rs;
-        colors[ci + 1] = tint[1] * mot * rs;
-        colors[ci + 2] = tint[2] * mot * rs;
+        // dusty accumulation near the edges of the drivable band
+        const edgeProx = Math.min(1, Math.max(0, (Math.abs(off) - (halfL(si) + halfR(si)) * 0.31) / 2.2));
+        const dust = 1 - edgeProx * 0.1;
+        colors[ci] = tint[0] * mot * rs * dust * 1.02;
+        colors[ci + 1] = tint[1] * mot * rs * dust;
+        colors[ci + 2] = tint[2] * mot * rs * dust * 0.96;
       } else {
         colors[ci] = 1;
         colors[ci + 1] = 1;

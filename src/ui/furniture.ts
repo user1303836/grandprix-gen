@@ -320,6 +320,25 @@ export function buildFurniture(track: Track): Group {
     beam.rotation.y = -f.heading;
     beam.castShadow = true;
     group.add(beam);
+    // start light bar: 5 lamps under the beam (red until the field is away)
+    const lampGeo = new CylinderGeometry(0.22, 0.22, 0.1, 10);
+    lampGeo.rotateX(Math.PI / 2);
+    for (let k = 0; k < 5; k++) {
+      const lampMat = new MeshStandardMaterial({
+        color: 0x1a1c20,
+        emissive: 0xff2a22,
+        emissiveIntensity: 2.2,
+      });
+      const lamp = new Mesh(lampGeo, lampMat);
+      lamp.position.set(
+        f.x - Math.cos(f.heading) * (k - 2) * 0.85,
+        f.z + 6.85,
+        -f.y - Math.sin(f.heading) * (k - 2) * 0.85,
+      );
+      lamp.rotation.y = -f.heading;
+      lamp.name = `startlight_${k}`;
+      group.add(lamp);
+    }
   }
 
   // ---------- grid slot paint ------------------------------------------------

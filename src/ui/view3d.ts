@@ -1750,6 +1750,12 @@ export class View3D {
     if (this.driveActive !== this.driveActivePrev) {
       this.driveActivePrev = this.driveActive;
       this.hud.setVisible(this.driveActive);
+      // start lights: red on the grid, green when away
+      this.trackGroup?.traverse((o) => {
+        if (o.name.startsWith("startlight_") && o instanceof Mesh) {
+          (o.material as MeshStandardMaterial).emissive.setHex(this.driveActive ? 0x22dd44 : 0xff2a22);
+        }
+      });
       if (this.driveActive) this.baseFov = this.camera.fov;
       else this.tvCamPos = null;
       if (this.camControl) this.camControl.style.display = this.driveActive ? "flex" : "none";

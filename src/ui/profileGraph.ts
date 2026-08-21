@@ -3,6 +3,7 @@
  * elevation, speed, grade, cut/fill, banking) with hover-station sync.
  */
 
+import { FeatureColors } from "../core/character";
 import { el } from "./dom";
 import type { AppState } from "./state";
 
@@ -72,6 +73,18 @@ export class ProfileGraph {
     const track = state.track;
     const n = track.samples.length;
     const L = track.length;
+
+    // feature tick marks across the top of the strip
+    if (track.features && track.features.length > 0) {
+      for (const f of track.features) {
+        const x0 = (f.sStart / L) * cv.width;
+        const x1 = (f.sEnd / L) * cv.width;
+        ctx.fillStyle = FeatureColors[f.kind] ?? "#ffb454";
+        ctx.globalAlpha = 0.75;
+        ctx.fillRect(x0, 0, Math.max(2, x1 - x0), 3 * dpr);
+        ctx.globalAlpha = 1;
+      }
+    }
 
     // extract channel values
     const vals = new Float64Array(n);
