@@ -51,6 +51,7 @@ import { makeAsphaltTexture, makeGrassTexture, makeGravelTexture } from "./textu
 import { buildFurniture } from "./furniture";
 import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
+import { RainSystem } from "./rain";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
@@ -102,6 +103,7 @@ const RUNOFF_COLORS: Record<string, number> = {
 };
 
 export type DayTime = "noon" | "golden" | "dusk" | "night";
+export type Weather = "dry" | "rain";
 
 interface SkyPreset {
   sunElevation: number; // degrees above horizon
@@ -195,6 +197,9 @@ export class View3D {
   private bloomPass: UnrealBloomPass;
   private sky: SkyDome;
   private dayTime: DayTime = "noon";
+  private weather: Weather = "dry";
+  private rain = new RainSystem();
+  private wetFactor = 0; // 0 dry, 1 soaked (lerped)
   private hemi: AmbientLight;
 
   // drive mode
@@ -243,6 +248,8 @@ export class View3D {
     this.fitBtn = fitBtn;
     this.setupDayControl();
     this.hud = new DriveHUD(this.container);
+    this.scene.add(this.rain.points);
+    this.setupWeatherControl();
 
     this.hemi = new AmbientLight(0xb4b8bc, 0.55);
     this.scene.add(this.hemi);
@@ -327,6 +334,7 @@ export class View3D {
     this.visible = v;
     if (this.fitBtn) this.fitBtn.style.display = v ? "block" : "none";
     if (this.dayControl) this.dayControl.style.display = v ? "flex" : "none";
+    if (this.weatherControl) this.weatherControl.style.display = v ? "flex" : "none";
     if (!v && this.hoverEl) this.hoverEl.style.display = "none";
     if (v && this.needsRebuild && this.state) {
       this.rebuildScene(this.state);
@@ -512,18 +520,27 @@ export class View3D {
   // ---------------------------------------------------------- day time
   private applyDayTime(): void {
     const p = SKY_PRESETS[this.dayTime];
-    // sky dome style
-    this.sky.setStyle(SKY_STYLES[this.dayTime]);
+    // sky dome style (rain overrides toward slate overcast)
+    if (this.weather === "rain") {
+      this.sky.setStyle({
+        zenith: 0x3a4450, horizon: 0x6a7480, ground: 0x2a3038,
+        sunColor: 0xb8c4d4, sunIntensity: 0.25, cloudCover: 0.9,
+        cloudTint: 0x4a5460, stars: 0, haze: 0.55,
+      });
+    } else {
+      this.sky.setStyle(SKY_STYLES[this.dayTime]);
+    }
     this.sky.setSunDirection(this.sunDirection());
     // lights
-    this.sun.color.setHex(p.sunColor);
-    this.sun.intensity = p.sunIntensity;
-    this.hemi.color.setHex(p.ambientColor);
-    this.hemi.intensity = p.ambientIntensity;
+    this.sun.color.setHex(this.weather === "rain" ? 0xaebdd2 : p.sunColor);
+    this.sun.intensity = this.weather === "rain" ? p.sunIntensity * 0.55 : p.sunIntensity;
+    this.hemi.color.setHex(this.weather === "rain" ? 0x7a8694 : p.ambientColor);
+    this.hemi.intensity = this.weather === "rain" ? p.ambientIntensity * 1.25 : p.ambientIntensity;
     // fog + exposure + bloom
     const span = this.state?.track ? estimateSpan(this.state.track) * 1.4 : 2200;
-    this.scene.fog = new Fog(p.fogColor, span * p.fogNearK, span * p.fogFarK);
-    this.renderer.toneMappingExposure = p.exposure;
+    const raining = this.weather === "rain";
+    this.scene.fog = new Fog(raining ? 0x5a646e : p.fogColor, span * (raining ? 1.6 : p.fogNearK), span * (raining ? 6.5 : p.fogFarK));
+    this.renderer.toneMappingExposure = raining ? p.exposure * 0.9 : p.exposure;
     this.bloomPass.strength = p.bloom;
     this.bloomPass.threshold = this.dayTime === "night" ? 0.55 : 1.55;
     // floodlights (only sensible with a track)
@@ -557,6 +574,50 @@ export class View3D {
     wrap.style.display = "none";
     this.container.appendChild(wrap);
     this.dayControl = wrap;
+  }
+
+  private weatherControl: HTMLDivElement | null = null;
+  private setupWeatherControl(): void {
+    const wrap = document.createElement("div");
+    wrap.className = "day-control weather-control";
+    for (const w of ["dry", "rain"] as const) {
+      const b = document.createElement("button");
+      b.textContent = w === "dry" ? "\u2600 dry" : "\u2614 rain";
+      b.dataset.weather = w;
+      if (w === this.weather) b.classList.add("active");
+      b.addEventListener("click", () => {
+        this.weather = w;
+        wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+        this.applyDayTime();
+      });
+      wrap.appendChild(b);
+    }
+    wrap.style.display = "none";
+    this.container.appendChild(wrap);
+    this.weatherControl = wrap;
+  }
+
+  /** Wetness lerp + material wet-look application. */
+  private updateWetness(dt: number): void {
+    const target = this.weather === "rain" ? 1 : 0;
+    if (Math.abs(this.wetFactor - target) > 0.002) {
+      this.wetFactor += (target - this.wetFactor) * Math.min(1, dt * 1.5);
+      const wf = this.wetFactor;
+      this.trackGroup?.traverse((o) => {
+        if (o instanceof Mesh && o.material instanceof MeshStandardMaterial) {
+          const m = o.material;
+          if (o.name.startsWith("asphalt") || o.name.startsWith("kerb") || o.name.startsWith("line") || o.name === "structure_pit-lane" || o.name === "structure_service-road") {
+            m.roughness = (m.userData.dryRough ?? (m.userData.dryRough = m.roughness)) * (1 - wf * 0.75);
+            m.metalness = wf * 0.35;
+          }
+          if (o.name === "buildings" || o.name.startsWith("structure")) {
+            m.roughness = (m.userData.dryRough ?? (m.userData.dryRough = m.roughness)) * (1 - wf * 0.4);
+          }
+        }
+      });
+      // terrain darkens when soaked
+      this.rain.setActive(this.wetFactor > 0.25);
+    }
   }
 
   // ---------------------------------------------------------- floodlights
@@ -1312,6 +1373,8 @@ export class View3D {
     this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.sky.setTime(tNow);
     this.cloudShadows.setTime(tNow);
+    this.updateWetness(dt);
+    this.rain.update(dt, this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.trackGroup?.traverse((o) => {
       if (o instanceof Mesh && o.material instanceof ShaderMaterial && o.material.uniforms?.time) {
         o.material.uniforms.time.value = tNow;

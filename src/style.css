@@ -757,3 +757,7 @@ button.active {
   width: 200px;
   height: 200px;
 }
+
+.weather-control {
+  top: 96px;
+}
