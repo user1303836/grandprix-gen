@@ -227,6 +227,32 @@ export function buildFurniture(track: Track): Group {
     boardIdx++;
   }
 
+  // ---------- checkered start line --------------------------------------------
+  {
+    const cv = document.createElement("canvas");
+    cv.width = 128;
+    cv.height = 32;
+    const ctx = cv.getContext("2d")!;
+    for (let x = 0; x < 16; x++) {
+      for (let y = 0; y < 4; y++) {
+        ctx.fillStyle = (x + y) % 2 === 0 ? "#14161a" : "#f2f0ea";
+        ctx.fillRect(x * 8, y * 8, 8, 8);
+      }
+    }
+    const tex = new CanvasTexture(cv);
+    tex.colorSpace = SRGBColorSpace;
+    const smp = track.samples[0];
+    const w = track.props.widthL[0] + track.props.widthR[0] - 1;
+    const line = new Mesh(
+      new PlaneGeometry(w, 1.4),
+      new MeshStandardMaterial({ map: tex, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -1 }),
+    );
+    line.position.set(smp.x, smp.z + 0.04, -smp.y);
+    line.rotation.x = -Math.PI / 2;
+    line.rotation.z = -smp.heading;
+    group.add(line);
+  }
+
   // ---------- start/finish gantry ------------------------------------------
   {
     const f = frameAt(track, 0);

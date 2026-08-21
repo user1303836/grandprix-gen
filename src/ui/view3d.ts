@@ -452,7 +452,7 @@ export class View3D {
         this.trackGroup.add(this.buildingsMesh(state.buildings, carved));
       }
     } else if (track) {
-      const span = estimateSpan(track) * 2.4;
+      const span = estimateSpan(track) * 9;
       const gm = buildGridMesh(() => -0.08, -span / 2, -span / 2, span / 2, span / 2, 2, 2);
       const ground = this.gridMesh(gm.positions, gm.indices, 0x51683c);
       const gmat = ground.material as MeshStandardMaterial;
