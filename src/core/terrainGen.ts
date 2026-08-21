@@ -159,11 +159,11 @@ export function generateTerrainTrack(
     // relocate candidates within the site so avoidance/contour costs can
     // actually choose between PLACES, not just shapes
     const ang = placeRng.range(0, Math.PI * 2);
-    const rad = k === 0 ? 0 : placeRng.range(0, halfSpan * 0.42);
+    const rad = k === 0 ? 0 : placeRng.range(0, halfSpan * 0.3);
     const r = generateValidTrack(sub, params, {
       ...buildOpts,
-      // keep the relocated plan safely inside the DEM
-      maxFootprintRadius: Math.max(halfSpan * 0.3, (halfSpan - rad) * 0.8),
+      // keep the relocated plan strictly inside the DEM (off-grid = NaN)
+      maxFootprintRadius: Math.max(halfSpan * 0.3, halfSpan * 0.9 - rad),
       centerOffset: { x: Math.cos(ang) * rad, y: Math.sin(ang) * rad },
     }, 6);
     opts.onProgress?.(k + 1, candidates);

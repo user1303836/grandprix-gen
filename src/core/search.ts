@@ -56,15 +56,10 @@ export function searchCandidates(
     let genOpts: SearchOptions = opts;
     if (opts.siteHalfSpan && opts.terrainSampler) {
       const ang = placeRng.range(0, Math.PI * 2);
-      const rad = i === 0 ? 0 : placeRng.range(0, opts.siteHalfSpan * 0.42);
+      const rad = i === 0 ? 0 : placeRng.range(0, opts.siteHalfSpan * 0.3);
       genOpts = {
         ...opts,
-        maxFootprintRadius: Math.max(
-          opts.siteHalfSpan * 0.3,
-          ((opts.maxFootprintRadius ?? opts.siteHalfSpan * 0.72) / (opts.siteHalfSpan * 0.72)) *
-            (opts.siteHalfSpan - rad) *
-            0.8,
-        ),
+        maxFootprintRadius: Math.max(opts.siteHalfSpan * 0.3, opts.siteHalfSpan * 0.9 - rad),
         centerOffset: { x: Math.cos(ang) * rad, y: Math.sin(ang) * rad },
       };
     }

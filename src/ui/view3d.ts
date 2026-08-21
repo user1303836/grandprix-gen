@@ -257,11 +257,16 @@ export class View3D {
       // detailed carved site terrain
       const g = state.terrain;
       const carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+      // cell size well under the narrowest carved bench (~13 m in cuts)
+      const span = Math.max(g.width, g.height) * g.resolution;
+      const maxSide = Math.max(240, Math.min(720, Math.ceil(span / 9.5)));
+      // open the corridor: cull terrain triangles centered within ~11 m of
+      // carve-active samples (the road + runoff + skirts cover the gap)
       const holeProx = makeTrackProximity(
         track.samples.filter((_, i) => !track.carveMask || track.carveMask[i] === 1),
       );
-      const holeTest = (x: number, y: number) => holeProx.nearest(x, y, 12) !== null;
-      const siteMesh = this.terrainMesh(g, carve, 320, 0, holeTest);
+      const holeTest = (x: number, y: number) => holeProx.nearest(x, y, 11) !== null;
+      const siteMesh = this.terrainMesh(g, carve, maxSide, 0, holeTest);
       siteMesh.receiveShadow = true;
       this.trackGroup.add(siteMesh);
       // coarse surrounding context -- carved identically, otherwise its
@@ -455,9 +460,11 @@ export class View3D {
     const strideT = Math.max(1, Math.floor(Math.max(grid.width, grid.height) / maxSide));
     const nx = Math.max(2, Math.floor((grid.width - 1) / strideT));
     const ny = Math.max(2, Math.floor((grid.height - 1) / strideT));
+    const finite: boolean[] = [];
     const gm = buildGridMesh(
       (x, y) => {
         const z = sampler(x, y);
+        finite.push(Number.isFinite(z));
         return Number.isFinite(z) ? z + zOffset : 0;
       },
       grid.originX,
@@ -467,17 +474,29 @@ export class View3D {
       nx,
       ny,
     );
+    // never render the off-grid fallback plane: cull NaN triangles
+    {
+      const kept: number[] = [];
+      for (let i = 0; i < gm.indices.length; i += 3) {
+        if (finite[gm.indices[i]] && finite[gm.indices[i + 1]] && finite[gm.indices[i + 2]]) {
+          kept.push(gm.indices[i], gm.indices[i + 1], gm.indices[i + 2]);
+        }
+      }
+      gm.indices = new Uint32Array(kept);
+    }
     if (holeProximity) {
-      // cull triangles whose 3 vertices all sit inside the corridor
+      // cull triangles whose CENTROID sits inside the corridor: with the
+      // cell size below the carved bench width this opens the trench
+      // cleanly, with the boundary hidden inside the flat carved zone
       const kept: number[] = [];
       const pos = gm.positions;
       for (let i = 0; i < gm.indices.length; i += 3) {
-        let inside = 0;
-        for (let k = 0; k < 3; k++) {
-          const vi = gm.indices[i + k];
-          if (holeProximity(pos[vi * 3], pos[vi * 3 + 1])) inside++;
-        }
-        if (inside < 3) kept.push(gm.indices[i], gm.indices[i + 1], gm.indices[i + 2]);
+        const a = gm.indices[i];
+        const b = gm.indices[i + 1];
+        const c = gm.indices[i + 2];
+        const cx = (pos[a * 3] + pos[b * 3] + pos[c * 3]) / 3;
+        const cy = (pos[a * 3 + 1] + pos[b * 3 + 1] + pos[c * 3 + 1]) / 3;
+        if (!holeProximity(cx, cy)) kept.push(a, b, c);
       }
       gm.indices = new Uint32Array(kept);
     }
@@ -535,10 +554,11 @@ export class View3D {
         g = 0.38 - u * 0.02;
         b = 0.12 + u * 0.08;
       } else {
+        // high ground: rock face, only the very top goes pale
         const u = (t - 0.75) / 0.25;
-        r = 0.44 + u * 0.32;
-        g = 0.36 + u * 0.34;
-        b = 0.2 + u * 0.42;
+        r = 0.42 + u * 0.22;
+        g = 0.36 + u * 0.22;
+        b = 0.2 + u * 0.22;
       }
       // steep ground reads as rock regardless of elevation
       const rocky = Math.max(0, Math.min(1, (slope - 0.35) * 2.2));
@@ -871,9 +891,11 @@ export class View3D {
       const d = this.camera.position.distanceTo(sprite.position);
       const mat = sprite.material as SpriteMaterial;
       mat.opacity = Math.max(0, Math.min(1, 1.25 - d / (span * 1.1)));
-      const w = Math.max(16, Math.min(120, d * 0.05));
+      const w = Math.max(14, Math.min(52, d * 0.045));
       const aspect = sprite.scale.x / Math.max(1e-6, sprite.scale.y);
       sprite.scale.set(w * aspect, w, 1);
+      // hide when it's right on top of the camera
+      if (d < 55) mat.opacity = 0;
     }
   }
 
@@ -885,7 +907,7 @@ export class View3D {
       this.controls.enabled = false;
       // headlight so tunnels/unlit cuts read while driving
       if (!this.headlight) {
-        this.headlight = new PointLight(0xfff1d8, 0, 130, 1.1);
+        this.headlight = new PointLight(0xfff4e2, 0, 95, 1.5);
         this.scene.add(this.headlight);
       }
       const track = state.track;
@@ -908,7 +930,7 @@ export class View3D {
       }
       this.camera.rotateZ(this.driveChase ? 0 : -here.bank * 0.5);
       if (this.headlight) {
-        this.headlight.intensity = 620;
+        this.headlight.intensity = 260;
         this.headlight.position.set(here.x, here.z + 4, -here.y);
       }
     } else {

@@ -141,6 +141,24 @@ export function buildTrack(
   let z: Float64Array;
   if (opts.terrainSampler) {
     for (let i = 0; i < n; i++) groundZ[i] = opts.terrainSampler(uni.x[i], uni.y[i]);
+    // off-grid samples (NaN) break the vertical design -- substitute the
+    // nearest finite ground reading along the lap
+    if (!Number.isFinite(groundZ[0])) {
+      const anyFinite = [...groundZ].some(Number.isFinite);
+      if (!anyFinite) groundZ.fill(0);
+    }
+    let last = NaN;
+    for (let i = 0; i < n; i++) {
+      if (Number.isFinite(groundZ[i])) last = groundZ[i];
+      else if (Number.isFinite(last)) groundZ[i] = last;
+    }
+    // leading NaNs get the first finite value
+    let next = NaN;
+    for (let i = n - 1; i >= 0; i--) {
+      if (Number.isFinite(groundZ[i])) next = groundZ[i];
+      else if (Number.isFinite(next)) groundZ[i] = next;
+    }
+    if (!Number.isFinite(groundZ[0])) groundZ.fill(0);
     const tp = designTerrainProfile(groundZ, ds, params);
     z = tp.z;
   } else {
