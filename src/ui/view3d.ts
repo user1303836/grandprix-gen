@@ -56,6 +56,7 @@ import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
 import { RainSystem } from "./rain";
 import { buildCar } from "./car";
+import { SpraySystem } from "./spray";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
@@ -209,7 +210,8 @@ export class View3D {
   private dayTime: DayTime = "noon";
   private weather: Weather = "dry";
   private rain = new RainSystem();
-  private car: Group;
+  private cars: { group: Group; s: number; factor: number }[];
+  private spray: SpraySystem;
   private wetFactor = 0; // 0 dry, 1 soaked (lerped)
   private hemi: AmbientLight;
 
@@ -261,8 +263,14 @@ export class View3D {
     this.hud = new DriveHUD(this.container);
     this.scene.add(this.rain.points);
     this.setupWeatherControl();
-    this.car = buildCar();
-    this.scene.add(this.car);
+    this.cars = [
+      { group: buildCar(0x2a52c8), s: 0, factor: 1 },
+      { group: buildCar(0xc83a2a), s: 0.4, factor: 1.045 },
+      { group: buildCar(0xe8e4da), s: 0.72, factor: 0.955 },
+    ];
+    for (const c of this.cars) this.scene.add(c.group);
+    this.spray = new SpraySystem();
+    this.scene.add(this.spray.points);
 
     this.hemi = new AmbientLight(0xb4b8bc, 0.55);
     this.scene.add(this.hemi);
@@ -1577,14 +1585,26 @@ export class View3D {
         this.scene.add(this.headlight);
       }
       const track = state.track;
-      // the car lives where the camera is (chase) or ahead (cockpit: hide)
+      // field: player car follows driveS; rivals lap at their own factors
       {
-        const ci = Math.floor(this.driveS / track.ds) % track.samples.length;
-        const cp = sampleAt(track, this.driveS);
-        this.car.position.set(cp.x, cp.z + 0.02, -cp.y);
-        this.car.rotation.set(0, -cp.heading, 0);
-        this.car.visible = this.driveChase;
-        void ci;
+        const i = Math.floor(this.driveS / track.ds) % track.samples.length;
+        const vNow = Number.isFinite(track.samples[i].speed) ? track.samples[i].speed : 50;
+        this.cars.forEach((c, ci) => {
+          if (ci === 0) {
+            c.s = this.driveS;
+          } else {
+            c.s = (c.s + vNow * c.factor * dt) % track.length;
+          }
+          const cp = sampleAt(track, c.s);
+          c.group.position.set(cp.x, cp.z + 0.02, -cp.y);
+          c.group.rotation.set(0, -cp.heading, 0);
+          c.group.rotation.z = -cp.bank * 0.85;
+          c.group.visible = ci === 0 ? this.driveChase : true;
+          // spray behind each car when wet
+          if (this.wetFactor > 0.3 && vNow > 22) {
+            this.spray.emit(cp.x, cp.z + 0.4, -cp.y, -Math.cos(cp.heading) * vNow * 0.25, Math.sin(cp.heading) * vNow * 0.25);
+          }
+        });
       }
       if (!Number.isFinite(this.driveS)) this.driveS = 0;
       const idx = Math.floor(this.driveS / track.ds) % track.samples.length;
@@ -1626,15 +1646,20 @@ export class View3D {
       this.updateFloodlights();
     } else {
       if (this.headlight) this.headlight.intensity = 0;
-      // the car keeps lapping in orbit view at a relaxed pace
+      // the field keeps lapping in orbit view at a relaxed pace
       if (state.track) {
         this.orbitCarS = ((this.orbitCarS ?? 0) + dt * 52) % state.track.length;
-        const cp = sampleAt(state.track, this.orbitCarS);
-        this.car.position.set(cp.x, cp.z + 0.02, -cp.y);
-        this.car.rotation.set(0, -cp.heading, 0);
-        this.car.visible = true;
-        // banking: lean into the corner
-        this.car.rotation.z = -cp.bank * 0.85;
+        this.cars.forEach((c, ci) => {
+          const cs = ci === 0 ? this.orbitCarS : (this.orbitCarS * c.factor + ci * state.track!.length * 0.31) % state.track!.length;
+          const cp = sampleAt(state.track!, cs);
+          c.group.position.set(cp.x, cp.z + 0.02, -cp.y);
+          c.group.rotation.set(0, -cp.heading, 0);
+          c.group.rotation.z = -cp.bank * 0.85;
+          c.group.visible = true;
+          if (this.wetFactor > 0.3) {
+            this.spray.emit(cp.x, cp.z + 0.4, -cp.y, -Math.cos(cp.heading) * 12, Math.sin(cp.heading) * 12);
+          }
+        });
       }
       if (this.camera.fov !== this.baseFov) {
         this.camera.fov += (this.baseFov - this.camera.fov) * Math.min(1, dt * 6);
@@ -1653,6 +1678,7 @@ export class View3D {
     this.windTime.value = tNow;
     windUniform.value = tNow;
     this.updateWetness(dt);
+    this.spray.update(dt);
     this.rain.update(dt, this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.trackGroup?.traverse((o) => {
       if (o instanceof Mesh && o.material instanceof ShaderMaterial && o.material.uniforms?.time) {
