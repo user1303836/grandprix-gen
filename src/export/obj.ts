@@ -4,12 +4,12 @@
  */
 
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
-import { carveSampler, type TerrainGrid } from "../core/terrain";
+import { carveSampler, type TerrainSurface } from "../core/terrain";
 import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
 import type { Track } from "../core/types";
 
 export interface ObjOptions {
-  terrain?: TerrainGrid | null;
+  terrain?: TerrainSurface | null;
   terrainExtent?: number;
 }
 

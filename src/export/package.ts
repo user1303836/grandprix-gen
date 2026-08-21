@@ -13,7 +13,7 @@ import { trackToObj, trackMtl } from "./obj";
 import { trackToBlenderScript } from "./blender";
 import { trackToOpenDrive } from "./opendrive";
 import { trackToGlb } from "./glb";
-import type { TerrainGrid } from "../core/terrain";
+import type { TerrainSurface } from "../core/terrain";
 import type { Track } from "../core/types";
 
 export function downloadFile(name: string, content: string | Uint8Array | ArrayBuffer, mime = "text/plain"): void {
@@ -35,7 +35,7 @@ export function downloadFile(name: string, content: string | Uint8Array | ArrayB
 }
 
 export interface PackageOptions {
-  terrain?: TerrainGrid | null;
+  terrain?: TerrainSurface | null;
   includeGlb?: boolean;
 }
 

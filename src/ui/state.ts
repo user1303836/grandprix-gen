@@ -39,6 +39,7 @@ export interface AppState {
   vehicleId: string;
   candidates: Candidate[];
   candidatesSelected: Set<number>;
+  /** real-site DEM (geographic) */
   terrain: TerrainGrid | null;
   /** Coarse surrounding-area DEM for context rendering. */
   terrainContext: TerrainGrid | null;

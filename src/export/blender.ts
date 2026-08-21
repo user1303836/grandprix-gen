@@ -7,12 +7,12 @@
  * Run inside Blender's scripting workspace: exec(open('track_blender.py').read())
  */
 
-import type { TerrainGrid } from "../core/terrain";
+import type { TerrainSurface } from "../core/terrain";
 import { buildBarrierMeshes, buildTrackMesh } from "./mesh";
 import type { Track } from "../core/types";
 
 export interface BlenderOptions {
-  terrain?: TerrainGrid | null;
+  terrain?: TerrainSurface | null;
   stride?: number;
 }
 

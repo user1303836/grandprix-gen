@@ -14,7 +14,7 @@ import {
 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
-import { carveSampler, type TerrainGrid } from "../core/terrain";
+import { carveSampler, type TerrainSurface } from "../core/terrain";
 import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
 import type { Track } from "../core/types";
 
@@ -46,7 +46,7 @@ function partColor(name: string): number {
   return 0x888888;
 }
 
-export async function trackToGlb(track: Track, terrain?: TerrainGrid | null): Promise<ArrayBuffer> {
+export async function trackToGlb(track: Track, terrain?: TerrainSurface | null): Promise<ArrayBuffer> {
   const group = new Group();
   group.name = "grandprix-gen-circuit";
 
