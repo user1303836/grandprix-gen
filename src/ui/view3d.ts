@@ -24,6 +24,7 @@ import {
   Object3D,
   PCFSoftShadowMap,
   PerspectiveCamera,
+  PointLight,
   Raycaster,
   RepeatWrapping,
   Scene,
@@ -263,10 +264,12 @@ export class View3D {
       const siteMesh = this.terrainMesh(g, carve, 320, 0, holeTest);
       siteMesh.receiveShadow = true;
       this.trackGroup.add(siteMesh);
-      // coarse surrounding context
+      // coarse surrounding context -- carved identically, otherwise its
+      // coarse triangles roof over the cut trenches the site mesh opens
       if (state.terrainContext) {
         const ctx = state.terrainContext;
-        const ctxMesh = this.terrainMesh(ctx, (x, y) => ctx.elevationAt(x, y), 200, 0);
+        const ctxCarve = carveSampler(ctx, track.samples, track.carveMask, 40, 120, track.carveInner);
+        const ctxMesh = this.terrainMesh(ctx, (x, y) => ctxCarve(x, y), 200, 0);
         ctxMesh.position.y = -1.5; // site mesh wins the overlap
         ctxMesh.receiveShadow = true;
         this.trackGroup.add(ctxMesh);
@@ -719,11 +722,17 @@ export class View3D {
       side: DoubleSide,
     });
     const mesh = new Mesh(geo, mat);
-    mesh.castShadow = part.name !== "embankment" && part.name !== "pit-lane";
+    // walls/tubes hug or bury into the terrain; letting them cast shadows
+    // only buys shadow-acne on their curved faces (the km-wide shadow map
+    // can't resolve them). Bridges/piers keep their dramatic long shadows.
+    const casts = part.name === "bridge" || part.name === "piers";
+    mesh.castShadow = casts;
     mesh.receiveShadow = true;
     mesh.name = `structure_${part.name}`;
     return mesh;
   }
+
+  private headlight: PointLight | null = null;
 
   // ---------------------------------------------------- hover tooltip
   private hoverRay = new Raycaster();
@@ -874,6 +883,11 @@ export class View3D {
     if (!state) return;
     if (this.driveActive && state.track) {
       this.controls.enabled = false;
+      // headlight so tunnels/unlit cuts read while driving
+      if (!this.headlight) {
+        this.headlight = new PointLight(0xfff1d8, 0, 130, 1.1);
+        this.scene.add(this.headlight);
+      }
       const track = state.track;
       if (!Number.isFinite(this.driveS)) this.driveS = 0;
       const idx = Math.floor(this.driveS / track.ds) % track.samples.length;
@@ -893,7 +907,12 @@ export class View3D {
         this.camera.lookAt(ahead.x, ahead.z + h * 0.6, -ahead.y);
       }
       this.camera.rotateZ(this.driveChase ? 0 : -here.bank * 0.5);
+      if (this.headlight) {
+        this.headlight.intensity = 620;
+        this.headlight.position.set(here.x, here.z + 4, -here.y);
+      }
     } else {
+      if (this.headlight) this.headlight.intensity = 0;
       this.controls.enabled = true;
       this.controls.update();
       this.updateLabels();

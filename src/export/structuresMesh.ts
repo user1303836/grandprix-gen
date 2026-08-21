@@ -19,9 +19,10 @@ class GeoAcc {
   pos: number[] = [];
   idx: number[] = [];
   quad(a: number[], b: number[], c: number[], d: number[]) {
+    // a,b,c,d in PERIMETER order; consistent CCW triangles
     const base = this.pos.length / 3;
     this.pos.push(...a, ...b, ...c, ...d);
-    this.idx.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+    this.idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
   }
   tri(a: number[], b: number[], c: number[]) {
     const base = this.pos.length / 3;
@@ -72,6 +73,20 @@ interface Frame {
   wL: number;
   wR: number;
   heading: number;
+}
+
+/** Boxcar smooth a per-station profile (structure crests/heights). */
+function smoothLine(vals: number[], win: number): number[] {
+  return vals.map((_, i) => {
+    let acc = 0;
+    let cnt = 0;
+    for (let k = -win; k <= win; k++) {
+      const j = Math.min(vals.length - 1, Math.max(0, i + k));
+      acc += vals[j];
+      cnt++;
+    }
+    return acc / cnt;
+  });
 }
 
 export function buildStructureMeshes(
@@ -174,103 +189,147 @@ export function buildStructureMeshes(
         piers.box(f.x, f.y, top + 0.3, Math.min(f.wL + f.wR + 2, 20), 2.0, 0.7, f.heading + Math.PI / 2);
       }
     } else if (sp.kind === "tunnel") {
-      // tube: arc over the road; portals at both ends
+      // tube: arc over the road; portals at both ends, extended proud
       const SEG = 10;
       const step = 2;
+      const extS = Math.round(18 / ds);
+      const idxsExt: number[] = [];
+      for (let k = -extS; k < len + extS; k++) {
+        idxsExt.push(i0 + k);
+      }
+      idxs.length = 0;
+      idxs.push(...idxsExt);
       const tubeLen = idxs.length;
+      // adaptive elliptical arch: lateral = road + margin, crown height
+      // capped to stay below the ground surface (a 15 m tube pokes out of
+      // a 10 m bore and the hill slices through the interior)
+      const smpArr = track.samples;
+      // precompute + smooth the arch profile along the span
+      const rawLat: number[] = [];
+      const rawH: number[] = [];
+      for (const ii of idxs) {
+        const i2 = ((ii % n) + n) % n;
+        const smp = smpArr[i2];
+        const f = frameAt(ii);
+        rawLat.push(Math.max(f.wL, f.wR) + 1.3);
+        const depth = Number.isFinite(smp.groundZ) ? smp.groundZ - smp.z : 12;
+        rawH.push(Math.max(2.6, Math.min(6.2, depth - 0.8)));
+      }
+      const smLat = smoothLine(rawLat, 6);
+      const smH = smoothLine(rawH, 6);
+      const archAt = (k: number): { lat: number; h: number } => ({
+        lat: smLat[Math.min(smLat.length - 1, Math.max(0, k))],
+        h: smH[Math.min(smH.length - 1, Math.max(0, k))],
+      });
       for (let k = 0; k < tubeLen - step; k += step) {
         const a = frameAt(idxs[k]);
         const b = frameAt(idxs[k + step]);
-        const rA = a.wL + a.wR + 2.5;
-        const rB = b.wL + b.wR + 2.5;
+        const aa = archAt(k);
+        const ab = archAt(k + step);
         for (let sgm = 0; sgm < SEG; sgm++) {
           const t0 = (sgm / SEG) * Math.PI;
           const t1 = ((sgm + 1) / SEG) * Math.PI;
-          // arc from left ground level over the top to the right
-          const p00 = [a.x + a.nx * Math.cos(t0) * rA * -1, a.y + a.ny * Math.cos(t0) * rA * -1, a.z + Math.sin(t0) * rA * 0.85 + 0.4];
-          const p01 = [a.x + a.nx * Math.cos(t1) * rA * -1, a.y + a.ny * Math.cos(t1) * rA * -1, a.z + Math.sin(t1) * rA * 0.85 + 0.4];
-          const p10 = [b.x + b.nx * Math.cos(t0) * rB * -1, b.y + b.ny * Math.cos(t0) * rB * -1, b.z + Math.sin(t0) * rB * 0.85 + 0.4];
-          const p11 = [b.x + b.nx * Math.cos(t1) * rB * -1, b.y + b.ny * Math.cos(t1) * rB * -1, b.z + Math.sin(t1) * rB * 0.85 + 0.4];
+          // right ground -> crown -> left ground (elliptical)
+          const p00 = [a.x + a.nx * Math.cos(t0) * aa.lat * -1, a.y + a.ny * Math.cos(t0) * aa.lat * -1, a.z + Math.sin(t0) * aa.h + 0.35];
+          const p01 = [a.x + a.nx * Math.cos(t1) * aa.lat * -1, a.y + a.ny * Math.cos(t1) * aa.lat * -1, a.z + Math.sin(t1) * aa.h + 0.35];
+          const p10 = [b.x + b.nx * Math.cos(t0) * ab.lat * -1, b.y + b.ny * Math.cos(t0) * ab.lat * -1, b.z + Math.sin(t0) * ab.h + 0.35];
+          const p11 = [b.x + b.nx * Math.cos(t1) * ab.lat * -1, b.y + b.ny * Math.cos(t1) * ab.lat * -1, b.z + Math.sin(t1) * ab.h + 0.35];
           tunnel.quad(p00, p10, p11, p01);
         }
       }
       // portals: ring frames slightly proud of the tube at both ends
-      for (const endI of [idxs[0], idxs[idxs.length - 1]]) {
-        const f = frameAt(endI);
-        const r = f.wL + f.wR + 2.5;
-        const R = r + 1.6;
+      for (const endK of [0, idxs.length - 1]) {
+        const f = frameAt(idxs[endK]);
+        const aa = archAt(endK);
+        const lat = aa.lat;
+        const h = aa.h;
+        const lat2 = lat + 1.1;
+        const h2 = h + 0.8;
         for (let sgm = 0; sgm < SEG; sgm++) {
           const t0 = (sgm / SEG) * Math.PI;
           const t1 = ((sgm + 1) / SEG) * Math.PI;
-          const p0 = [f.x + f.nx * Math.cos(t0) * r * -1, f.y + f.ny * Math.cos(t0) * r * -1, f.z + Math.sin(t0) * r * 0.85 + 0.4];
-          const p1 = [f.x + f.nx * Math.cos(t1) * r * -1, f.y + f.ny * Math.cos(t1) * r * -1, f.z + Math.sin(t1) * r * 0.85 + 0.4];
-          const q0 = [f.x + f.nx * Math.cos(t0) * R * -1, f.y + f.ny * Math.cos(t0) * R * -1, f.z + Math.sin(t0) * R * 0.85 + 0.4];
-          const q1 = [f.x + f.nx * Math.cos(t1) * R * -1, f.y + f.ny * Math.cos(t1) * R * -1, f.z + Math.sin(t1) * R * 0.85 + 0.4];
+          const p0 = [f.x + f.nx * Math.cos(t0) * lat * -1, f.y + f.ny * Math.cos(t0) * lat * -1, f.z + Math.sin(t0) * h + 0.35];
+          const p1 = [f.x + f.nx * Math.cos(t1) * lat * -1, f.y + f.ny * Math.cos(t1) * lat * -1, f.z + Math.sin(t1) * h + 0.35];
+          const q0 = [f.x + f.nx * Math.cos(t0) * lat2 * -1, f.y + f.ny * Math.cos(t0) * lat2 * -1, f.z + Math.sin(t0) * h2 + 0.35];
+          const q1 = [f.x + f.nx * Math.cos(t1) * lat2 * -1, f.y + f.ny * Math.cos(t1) * lat2 * -1, f.z + Math.sin(t1) * h2 + 0.35];
           portals.quad(p0, q0, q1, p1);
         }
       }
     } else if (sp.kind === "retaining" || sp.kind === "rock-cut") {
       const acc = sp.kind === "retaining" ? retaining : rock;
-      const step = 2;
       const sides: (-1 | 1)[] = sp.side === "both" ? [-1, 1] : sp.side === "left" ? [-1] : [1];
       for (const side of sides) {
-        for (let k = 0; k < idxs.length - step; k += step) {
+        // sample the wall line densely, then SMOOTH the crest so the wall
+        // top follows the hillside without sawteeth
+        const line: { x: number; y: number; z: number; top: number }[] = [];
+        for (let k = 0; k < idxs.length; k++) {
           const a = frameAt(idxs[k]);
-          const b = frameAt(idxs[k + step]);
-          const wa = (side < 0 ? a.wL : a.wR) + 2.2;
-          const wb = (side < 0 ? b.wL : b.wR) + 2.2;
-          const ax = a.x + a.nx * wa * side;
-          const ay = a.y + a.ny * wa * side;
-          const bx = b.x + b.nx * wb * side;
-          const by = b.y + b.ny * wb * side;
-          // wall from below road level up to ground (+ cap)
-          const gA = groundAt(ax + a.nx * 3 * side, ay + a.ny * 3 * side, a.z - sp.minD);
-          const gB = groundAt(bx + b.nx * 3 * side, by + b.ny * 3 * side, b.z - sp.minD);
-          const topA = Math.max(gA + 0.7, a.z + 1.2);
-          const topB = Math.max(gB + 0.7, b.z + 1.2);
-          const botA = a.z - 0.6;
-          const botB = b.z - 0.6;
+          const w = (side < 0 ? a.wL : a.wR) + 2.2;
+          const x = a.x + a.nx * w * side;
+          const y = a.y + a.ny * w * side;
+          const g = groundAt(x + a.nx * 3 * side, y + a.ny * 3 * side, a.z - sp.minD);
+          line.push({ x, y, z: a.z - 0.6, top: Math.max(g + 0.7, a.z + 1.2) });
+        }
+        const sm = line.map((p, i) => {
+          let acc2 = 0;
+          let cnt = 0;
+          for (let k = -4; k <= 4; k++) {
+            const j = Math.min(line.length - 1, Math.max(0, i + k));
+            acc2 += line[j].top;
+            cnt++;
+          }
+          return { ...p, top: acc2 / cnt };
+        });
+        for (let k = 0; k < sm.length - 1; k++) {
+          const a = sm[k];
+          const b = sm[k + 1];
+          acc.quad([a.x, a.y, a.z], [b.x, b.y, b.z], [b.x, b.y, b.top], [a.x, a.y, a.top]);
+          // cap strip
+          const fA = frameAt(idxs[k]);
           acc.quad(
-            [ax, ay, botA],
-            [bx, by, botB],
-            [bx, by, topB],
-            [ax, ay, topA],
-          );
-          // cap
-          acc.quad(
-            [ax, ay, topA],
-            [bx, by, topB],
-            [bx + b.nx * 0.6 * side, by + b.ny * 0.6 * side, topB],
-            [ax + a.nx * 0.6 * side, ay + a.ny * 0.6 * side, topA],
+            [a.x, a.y, a.top],
+            [b.x, b.y, b.top],
+            [b.x + (-Math.sin(fA.heading)) * 0.6 * side, b.y + Math.cos(fA.heading) * 0.6 * side, b.top],
+            [a.x + (-Math.sin(fA.heading)) * 0.6 * side, a.y + Math.cos(fA.heading) * 0.6 * side, a.top],
           );
         }
       }
     } else if (sp.kind === "embankment") {
-      // grass skirts sloping from the corridor edge down to the ground
+      // grass skirts sloping from the corridor edge down to the ground;
+      // ground references smoothed along s so the skirt doesn't zigzag
       const step = 2;
       for (const side of [-1, 1] as const) {
-        for (let k = 0; k < idxs.length - step; k += step) {
-          const a = frameAt(idxs[k]);
-          const b = frameAt(idxs[k + step]);
-          const wa = (side < 0 ? a.wL : a.wR) + 4;
-          const wb = (side < 0 ? b.wL : b.wR) + 4;
-          const ax = a.x + a.nx * wa * side;
-          const ay = a.y + a.ny * wa * side;
-          const bx = b.x + b.nx * wb * side;
-          const by = b.y + b.ny * wb * side;
-          const runA = Math.max(3.5, (a.z - groundAt(ax, ay, a.z)) * 1.4 + 2);
-          const runB = Math.max(3.5, (b.z - groundAt(bx, by, b.z)) * 1.4 + 2);
-          const oxA = ax + a.nx * runA * side;
-          const oyA = ay + a.ny * runA * side;
-          const oxB = bx + b.nx * runB * side;
-          const oyB = by + b.ny * runB * side;
-          const gA = groundAt(oxA, oyA, a.z - sp.maxD) - 0.25;
-          const gB = groundAt(oxB, oyB, b.z - sp.maxD) - 0.25;
+        const inner: { x: number; y: number; z: number }[] = [];
+        const outerG: number[] = [];
+        const runs: number[] = [];
+        for (const ii of idxs) {
+          const a = frameAt(ii);
+          const w = (side < 0 ? a.wL : a.wR) + 4;
+          const x = a.x + a.nx * w * side;
+          const y = a.y + a.ny * w * side;
+          const gIn = groundAt(x, y, a.z - sp.maxD);
+          const run = Math.max(3.5, (a.z - gIn) * 1.4 + 2);
+          const ox = x + a.nx * run * side;
+          const oy = y + a.ny * run * side;
+          inner.push({ x, y, z: a.z - 0.12 });
+          runs.push(run);
+          outerG.push(groundAt(ox, oy, a.z - sp.maxD) - 0.25);
+        }
+        const smG = smoothLine(outerG, 5);
+        for (let k = 0; k < inner.length - step; k += step) {
+          const a = inner[k];
+          const b = inner[k + step];
+          const fa = frameAt(idxs[k]);
+          const fb = frameAt(idxs[k + step]);
+          const oxA = a.x + fa.nx * runs[k] * side;
+          const oyA = a.y + fa.ny * runs[k] * side;
+          const oxB = b.x + fb.nx * runs[k + step] * side;
+          const oyB = b.y + fb.ny * runs[k + step] * side;
           embank.quad(
-            [ax, ay, a.z - 0.12],
-            [bx, by, b.z - 0.12],
-            [oxB, oyB, gB],
-            [oxA, oyA, gA],
+            [a.x, a.y, a.z],
+            [b.x, b.y, b.z],
+            [oxB, oyB, smG[k + step]],
+            [oxA, oyA, smG[k]],
           );
         }
       }

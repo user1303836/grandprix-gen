@@ -348,11 +348,12 @@ function buildBarrierSide(track: Track, side: "left" | "right"): SimpleMesh | nu
     verts.push(px, py, pz, px, py, pz + H);
     const vi = verts.length / 3 - 2;
     if (runActive) {
+      // perimeter: prev-bottom a, prev-top b, cur-top d, cur-bottom c
       const a = vi - 2;
       const b = vi - 1;
       const c = vi;
       const d = vi + 1;
-      indices.push(a, c, b, b, c, d);
+      indices.push(a, b, d, a, d, c);
     }
     runActive = true;
   }

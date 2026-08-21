@@ -52,7 +52,6 @@ export function buildStatusBar(state: AppState): HTMLElement {
     const bits: string[] = [];
     if (m.structureM.bridge > 10) bits.push(`B ${(m.structureM.bridge / 1000).toFixed(1)}k`);
     if (m.structureM.tunnel > 10) bits.push(`T ${(m.structureM.tunnel / 1000).toFixed(1)}k`);
-    if (m.structureM["rock-cut"] > 10) bits.push(`C ${(m.structureM["rock-cut"] / 1000).toFixed(1)}k`);
     bar.append(cell("STRUCT", bits.join(" ")));
   }
   bar.append(cell("SURF DIV", m.surfaceDiversity.toFixed(0)));
