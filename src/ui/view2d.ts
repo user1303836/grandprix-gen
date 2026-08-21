@@ -301,6 +301,35 @@ export class View2D {
     return this.camY - y * this.scale;
   }
 
+  /** Render the map at 3x and download it as a poster PNG. */
+  capturePoster(): void {
+    if (!this.lastState) return;
+    const cv = this.canvas;
+    const keepW = cv.width;
+    const keepH = cv.height;
+    const keepScale = this.scale;
+    const keepCamX = this.camX;
+    const keepCamY = this.camY;
+    const factor = 3;
+    cv.width = keepW * factor;
+    cv.height = keepH * factor;
+    this.scale *= factor;
+    this.camX *= factor;
+    this.camY *= factor;
+    this.render(this.lastState);
+    const url = cv.toDataURL("image/png");
+    cv.width = keepW;
+    cv.height = keepH;
+    this.scale = keepScale;
+    this.camX = keepCamX;
+    this.camY = keepCamY;
+    this.render(this.lastState);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `grandprix-gen-map-${Date.now() % 100000}.png`;
+    a.click();
+  }
+
   render(state: AppState): void {
     this.lastState = state;
     this.resize();

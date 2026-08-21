@@ -763,6 +763,9 @@ export class App {
       case "svg":
         downloadFile(`${base}.svg`, trackToSvg(t, { drawSectors: true }), "image/svg+xml");
         break;
+      case "poster":
+        this.view2d.capturePoster();
+        break;
       case "csv":
         downloadFile(`${base}.csv`, trackToCsv(t), "text/csv");
         break;

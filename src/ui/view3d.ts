@@ -51,7 +51,7 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
-import { makeAsphaltTexture, makeGrassTexture, makeGravelTexture } from "./textures";
+import { makeAsphaltTexture, makeConcreteTexture, makeGrassTexture, makeGravelTexture } from "./textures";
 import { buildFurniture, windUniform } from "./furniture";
 import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
@@ -241,6 +241,7 @@ export class View3D {
   private asphaltTex = makeAsphaltTexture();
   private grassTex = makeGrassTexture();
   private gravelTex = makeGravelTexture();
+  private concreteTex = makeConcreteTexture();
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
   private sky: SkyDome;
@@ -1510,6 +1511,13 @@ export class View3D {
       pos[i + 2] = -part.positions[i + 1];
     }
     geo.setAttribute("position", new BufferAttribute(pos, 3));
+    // world-space uvs so the concrete texture tiles at ~7 m
+    const uv2 = new Float32Array(pos.length / 3 * 2);
+    for (let i = 0; i < pos.length / 3; i++) {
+      uv2[i * 2] = (pos[i * 3] + pos[i * 3 + 2]) / 7;
+      uv2[i * 2 + 1] = pos[i * 3 + 1] / 7;
+    }
+    geo.setAttribute("uv", new BufferAttribute(uv2, 2));
     geo.setIndex(new BufferAttribute(part.indices, 1));
     geo.computeVertexNormals();
     const colors: Record<string, number> = {
@@ -1524,11 +1532,13 @@ export class View3D {
       "pit-wall": 0xc8c4bc,
       "service-road": 0x5c5c58,
     };
+    const useConcrete = part.name === "bridge" || part.name === "piers" || part.name === "retaining" || part.name === "portals";
     const mat = new MeshStandardMaterial({
       color: colors[part.name] ?? 0x8a857c,
       roughness: part.name === "tunnel" ? 0.8 : 0.95,
       metalness: 0,
       side: DoubleSide,
+      map: useConcrete ? this.concreteTex : null,
     });
     const mesh = new Mesh(geo, mat);
     // walls/tubes hug or bury into the terrain; letting them cast shadows

@@ -96,6 +96,52 @@ export function makeGrassTexture(seed = 4242): CanvasTexture {
   return tex;
 }
 
+/** Concrete: pale gray with formwork panel lines + weathering streaks. */
+export function makeConcreteTexture(seed = 919): CanvasTexture {
+  const S = 256;
+  const cv = document.createElement("canvas");
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext("2d")!;
+  const rnd = seededRandom(seed);
+  ctx.fillStyle = "#e8e6e0";
+  ctx.fillRect(0, 0, S, S);
+  const img = ctx.getImageData(0, 0, S, S);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = 226 + (rnd() - 0.5) * 16;
+    d[i] = v;
+    d[i + 1] = v - 1;
+    d[i + 2] = v - 4;
+    d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  // formwork panel seams
+  ctx.strokeStyle = "rgba(120,118,112,0.5)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= S; x += 64) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, S);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= S; y += 42) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(S, y);
+    ctx.stroke();
+  }
+  // weathering streaks
+  for (let k = 0; k < 30; k++) {
+    const x = rnd() * S;
+    ctx.fillStyle = `rgba(110,108,100,${0.05 + rnd() * 0.09})`;
+    ctx.fillRect(x, rnd() * S * 0.5, 1 + rnd() * 2, 30 + rnd() * 60);
+  }
+  const tex = new CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = RepeatWrapping;
+  return tex;
+}
+
 /** Gravel: coarse pebble speckle. */
 export function makeGravelTexture(seed = 777): CanvasTexture {
   const S = 128;

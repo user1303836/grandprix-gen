@@ -26,6 +26,7 @@ const EXPORT_ITEMS: [string, string, string][] = [
   ["head", "PROJECT", ""],
   ["json", ".track.json (lossless project)", ""],
   ["head", "2D / CAD", ""],
+  ["poster", "Poster PNG (3x render)", ""],
   ["svg", "SVG plan", ""],
   ["csv", "CSV engineering data", ""],
   ["geojson", "GeoJSON (georeferenced)", ""],
