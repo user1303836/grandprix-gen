@@ -1,5 +1,7 @@
 # grandprix-gen
 
+![golden-hour orbit over a satellite-draped site](docs/demo.gif)
+
 ![golden-hour viaduct on a generated mountain circuit](docs/hero.png)
 
 **Procedural racetrack generator / parametric circuit-design sandbox.**
@@ -114,6 +116,9 @@ tunnels. Site search candidates relocate within the site and are scored by
 cross-slope, earthwork (with a superlinear penalty on giant fills),
 contour-following, and building overlap (OSM footprints; soft cost or hard
 rejection).
+
+Site mode drapes real satellite imagery (Esri World Imagery) over the
+carved 3D terrain and the 2D map backdrop.
 
 ### Rendering & atmosphere
 
