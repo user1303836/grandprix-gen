@@ -146,8 +146,8 @@ export class TerrainGrid implements TerrainSurface {
 // ---------------------------------------------------------------------------
 
 export interface TrackProximity {
-  /** nearest track sample: horizontal distance + its elevation (null if far) */
-  nearest(x: number, y: number, maxDist?: number): { d: number; z: number } | null;
+  /** nearest track sample: horizontal distance + elevation + index (null if far) */
+  nearest(x: number, y: number, maxDist?: number): { d: number; z: number; i?: number } | null;
   /** all samples within maxDist (for elevation-aware matching) */
   within(
     x: number,
