@@ -35,8 +35,21 @@ import {
   Vector3,
   WebGLRenderer,
   ConeGeometry,
+  CylinderGeometry,
+  BoxGeometry,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
+import { SkyDome, type SkyStyle } from "./sky";
+import {
+  ACESFilmicToneMapping,
+  Vector2 as Vec2,
+} from "three";
 import {
   buildGridMesh,
   buildTrackMesh,
@@ -83,6 +96,81 @@ const RUNOFF_COLORS: Record<string, number> = {
   shoulder: 0x4a4a48,
 };
 
+export type DayTime = "noon" | "golden" | "dusk" | "night";
+
+interface SkyPreset {
+  sunElevation: number; // degrees above horizon
+  sunAzimuth: number;
+  sunColor: number;
+  sunIntensity: number;
+  ambientColor: number;
+  ambientIntensity: number;
+  turbidity: number;
+  rayleigh: number;
+  mieCoefficient: number;
+  mieDirectionalG: number;
+  fogColor: number;
+  fogNearK: number; // multiplier of span
+  fogFarK: number;
+  exposure: number;
+  bloom: number;
+  floodlights: boolean;
+}
+
+const SKY_STYLES: Record<DayTime, SkyStyle> = {
+  noon: {
+    zenith: 0x2f62ab, horizon: 0xa8c8e2, ground: 0x5c6e7a,
+    sunColor: 0xfff3dc, sunIntensity: 0.85, cloudCover: 0.34,
+    cloudTint: 0xf4f7fa, stars: 0, haze: 0.3,
+  },
+  golden: {
+    zenith: 0x3a5a94, horizon: 0xe8b083, ground: 0x5c5248,
+    sunColor: 0xffc27a, sunIntensity: 1.25, cloudCover: 0.28,
+    cloudTint: 0xf6d9b8, stars: 0, haze: 0.42,
+  },
+  dusk: {
+    zenith: 0x2c3a68, horizon: 0xc97a5e, ground: 0x3c3644,
+    sunColor: 0xff8a52, sunIntensity: 1.5, cloudCover: 0.3,
+    cloudTint: 0xb89aa8, stars: 0.25, haze: 0.5,
+  },
+  night: {
+    zenith: 0x060a18, horizon: 0x18243c, ground: 0x05070c,
+    sunColor: 0xb8c8e8, sunIntensity: 0.28, cloudCover: 0.22,
+    cloudTint: 0x2a3450, stars: 1, haze: 0.3,
+  },
+};
+
+const SKY_PRESETS: Record<DayTime, SkyPreset> = {
+  noon: {
+    sunElevation: 52, sunAzimuth: 155, sunColor: 0xfff2dd, sunIntensity: 2.3,
+    ambientColor: 0xb4b8bc, ambientIntensity: 0.55,
+    turbidity: 7, rayleigh: 2.0, mieCoefficient: 0.004, mieDirectionalG: 0.8,
+    fogColor: 0x9db4c8, fogNearK: 3.6, fogFarK: 13, exposure: 1.05, bloom: 0.16,
+    floodlights: false,
+  },
+  golden: {
+    sunElevation: 14, sunAzimuth: 245, sunColor: 0xffc98a, sunIntensity: 2.0,
+    ambientColor: 0xa89a8c, ambientIntensity: 0.42,
+    turbidity: 8, rayleigh: 3.2, mieCoefficient: 0.009, mieDirectionalG: 0.85,
+    fogColor: 0xc9a98a, fogNearK: 3.0, fogFarK: 10, exposure: 1.02, bloom: 0.24,
+    floodlights: false,
+  },
+  dusk: {
+    sunElevation: 4.5, sunAzimuth: 262, sunColor: 0xff9a5c, sunIntensity: 1.5,
+    ambientColor: 0x7a7a92, ambientIntensity: 0.36,
+    turbidity: 9, rayleigh: 3.6, mieCoefficient: 0.014, mieDirectionalG: 0.9,
+    fogColor: 0x7a6e88, fogNearK: 2.8, fogFarK: 9.5, exposure: 0.98, bloom: 0.34,
+    floodlights: true,
+  },
+  night: {
+    sunElevation: -9, sunAzimuth: 262, sunColor: 0x7a92cc, sunIntensity: 0.42,
+    ambientColor: 0x44548a, ambientIntensity: 0.85,
+    turbidity: 3, rayleigh: 0.4, mieCoefficient: 0.001, mieDirectionalG: 0.7,
+    fogColor: 0x0e1624, fogNearK: 2.4, fogFarK: 8, exposure: 0.95, bloom: 0.75,
+    floodlights: true,
+  },
+};
+
 export class View3D {
   private container: HTMLElement;
   private renderer: WebGLRenderer;
@@ -95,6 +183,11 @@ export class View3D {
   private state: AppState | null = null;
   private disposed = false;
   private stripedCurbTex: CanvasTexture;
+  private composer: EffectComposer;
+  private bloomPass: UnrealBloomPass;
+  private sky: SkyDome;
+  private dayTime: DayTime = "noon";
+  private hemi: AmbientLight;
 
   // drive mode
   driveActive = false;
@@ -115,11 +208,14 @@ export class View3D {
     container.appendChild(this.renderer.domElement);
 
     this.scene = new Scene();
-    this.scene.background = makeSkyTexture();
     this.scene.fog = new Fog(0x9db4c8, 3000, 14000);
 
     this.camera = new PerspectiveCamera(55, 1, 0.5, 30000);
     this.camera.position.set(0, 400, 800);
+
+    // stylized sky dome (gradient + sun + clouds + stars)
+    this.sky = new SkyDome();
+    this.scene.add(this.sky.mesh);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -137,8 +233,10 @@ export class View3D {
     fitBtn.addEventListener("click", () => this.resetView());
     this.container.appendChild(fitBtn);
     this.fitBtn = fitBtn;
+    this.setupDayControl();
 
-    this.scene.add(new AmbientLight(0xb4b8bc, 0.55));
+    this.hemi = new AmbientLight(0xb4b8bc, 0.55);
+    this.scene.add(this.hemi);
     this.sun = new DirectionalLight(0xfff2dd, 2.1);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(4096, 4096);
@@ -148,6 +246,29 @@ export class View3D {
     this.scene.add(this.sun.target);
 
     this.stripedCurbTex = makeCurbStripeTexture();
+
+    // ---------- post-processing ----------
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloomPass = new UnrealBloomPass(new Vec2(1, 1), 0.22, 0.6, 1.02);
+    this.composer.addPass(this.bloomPass);
+    // vignette + subtle grain
+    const vignettePass = new ShaderPass({
+      uniforms: { tDiffuse: { value: null }, strength: { value: 0.32 } },
+      vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+      fragmentShader:
+        "uniform sampler2D tDiffuse; uniform float strength; varying vec2 vUv;" +
+        "void main(){ vec4 c = texture2D(tDiffuse, vUv);" +
+        " float d = distance(vUv, vec2(0.5));" +
+        " float v = smoothstep(0.42, 0.86, d) * strength;" +
+        " gl_FragColor = vec4(c.rgb * (1.0 - v), c.a); }",
+    });
+    this.composer.addPass(vignettePass);
+    this.composer.addPass(new SMAAPass(this.container.clientWidth || 1280, this.container.clientHeight || 800));
+    this.composer.addPass(new OutputPass());
+    this.applyDayTime();
 
     const animate = (t: number) => {
       if (this.disposed) return;
@@ -164,6 +285,7 @@ export class View3D {
     const h = this.container.clientHeight;
     if (w === 0 || h === 0) return;
     this.renderer.setSize(w, h);
+    this.composer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -195,6 +317,7 @@ export class View3D {
   setVisible(v: boolean): void {
     this.visible = v;
     if (this.fitBtn) this.fitBtn.style.display = v ? "block" : "none";
+    if (this.dayControl) this.dayControl.style.display = v ? "flex" : "none";
     if (!v && this.hoverEl) this.hoverEl.style.display = "none";
     if (v && this.needsRebuild && this.state) {
       this.rebuildScene(this.state);
@@ -251,6 +374,7 @@ export class View3D {
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
       this.maybeFitCamera(track, state.terrain);
+      this.rebuildFloodlights();
     }
 
     if (state.terrain && track) {
@@ -318,10 +442,12 @@ export class View3D {
     if (track) {
       const c = track.samples[0];
       this.sun.target.position.set(c.x, c.z, -c.y);
-      this.sun.position.set(c.x + span * 0.9, span * 1.1 + c.z + 800, -c.y + span * 0.55);
+      const dir = this.sunDirection();
+      this.sun.position.set(c.x + dir.x * span * 1.5, c.z + Math.max(120, dir.y * span * 1.5), -c.y + dir.z * span * 1.5);
     }
     // fog scales with the site so overview shots don't wash out
-    this.scene.fog = new Fog(0x9aa8a2, span * 3.4, span * 12);
+    const preset = SKY_PRESETS[this.dayTime];
+    this.scene.fog = new Fog(preset.fogColor, span * preset.fogNearK, span * preset.fogFarK);
 
     this.scene.add(this.trackGroup);
   }
@@ -356,6 +482,150 @@ export class View3D {
     if (!this.state?.track) return;
     this.fitCamera(this.state.track, this.state.terrain);
     this.lastTerrain = this.state.terrain;
+  }
+
+  // ---------------------------------------------------------- day time
+  private applyDayTime(): void {
+    const p = SKY_PRESETS[this.dayTime];
+    // sky dome style
+    this.sky.setStyle(SKY_STYLES[this.dayTime]);
+    this.sky.setSunDirection(this.sunDirection());
+    // lights
+    this.sun.color.setHex(p.sunColor);
+    this.sun.intensity = p.sunIntensity;
+    this.hemi.color.setHex(p.ambientColor);
+    this.hemi.intensity = p.ambientIntensity;
+    // fog + exposure + bloom
+    const span = this.state?.track ? estimateSpan(this.state.track) * 1.4 : 2200;
+    this.scene.fog = new Fog(p.fogColor, span * p.fogNearK, span * p.fogFarK);
+    this.renderer.toneMappingExposure = p.exposure;
+    this.bloomPass.strength = p.bloom;
+    this.bloomPass.threshold = this.dayTime === "night" ? 0.55 : 1.55;
+    // floodlights (only sensible with a track)
+    this.rebuildFloodlights();
+  }
+
+  private sunDirection(): Vector3 {
+    const p = SKY_PRESETS[this.dayTime];
+    const phi = (90 - p.sunElevation) * (Math.PI / 180);
+    const theta = p.sunAzimuth * (Math.PI / 180);
+    return new Vector3().setFromSphericalCoords(1, phi, theta);
+  }
+
+  /** Day-time segmented control (floating, 3D only). */
+  private dayControl: HTMLDivElement | null = null;
+  private setupDayControl(): void {
+    const wrap = document.createElement("div");
+    wrap.className = "day-control";
+    for (const t of ["noon", "golden", "dusk", "night"] as const) {
+      const b = document.createElement("button");
+      b.textContent = t;
+      b.dataset.day = t;
+      if (t === this.dayTime) b.classList.add("active");
+      b.addEventListener("click", () => {
+        this.dayTime = t;
+        wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+        this.applyDayTime();
+      });
+      wrap.appendChild(b);
+    }
+    wrap.style.display = "none";
+    this.container.appendChild(wrap);
+    this.dayControl = wrap;
+  }
+
+  // ---------------------------------------------------------- floodlights
+  private floodGroup: Group | null = null;
+  private floodPositions: Vector3[] = [];
+  private floodLights: { light: PointLight; idx: number }[] = [];
+
+  private rebuildFloodlights(): void {
+    if (this.floodGroup) {
+      this.scene.remove(this.floodGroup);
+      this.floodGroup.traverse((o) => {
+        if (o instanceof Mesh) {
+          o.geometry.dispose();
+          (o.material as MeshStandardMaterial).dispose();
+        }
+      });
+      this.floodGroup = null;
+    }
+    for (const fl of this.floodLights) this.scene.remove(fl.light);
+    this.floodLights = [];
+    this.floodPositions = [];
+    const track = this.state?.track;
+    if (!track || !SKY_PRESETS[this.dayTime].floodlights) return;
+
+    // pole geometry: shared
+    const poleGeo = new CylinderGeometry(0.12, 0.22, 13.5, 5);
+    const poleMat = new MeshStandardMaterial({ color: 0x4a4d52, roughness: 0.6, metalness: 0.6 });
+    const headGeo = new BoxGeometry(2.6, 0.5, 1.1);
+    const headMat = new MeshStandardMaterial({
+      color: 0x303236,
+      emissive: 0xfff6dc,
+      emissiveIntensity: 4.5,
+    });
+    const poles = new InstancedMesh(poleGeo, poleMat, 0);
+    const heads = new InstancedMesh(headGeo, headMat, 0);
+    this.floodGroup = new Group();
+    this.floodGroup.add(poles, heads);
+
+    const n = track.samples.length;
+    const spacing = Math.max(1, Math.round(130 / track.ds));
+    const positions: { x: number; y: number; z: number; heading: number; side: number }[] = [];
+    for (let i = 0; i < n; i += spacing) {
+      const smp = track.samples[i];
+      const side = (i / spacing) % 2 === 0 ? 1 : -1;
+      const nx = -Math.sin(smp.heading);
+      const ny = Math.cos(smp.heading);
+      const off = side * (Math.max(track.props.widthL[i], track.props.widthR[i]) + 13);
+      positions.push({
+        x: smp.x + nx * off,
+        y: smp.y + ny * off,
+        z: smp.z - off * Math.sin(smp.bank),
+        heading: smp.heading,
+        side,
+      });
+    }
+    poles.count = positions.length;
+    heads.count = positions.length;
+    const m4 = new Matrix4();
+    positions.forEach((p2, i) => {
+      m4.makeTranslation(p2.x, p2.z + 6.75, -p2.y);
+      poles.setMatrixAt(i, m4);
+      // head tilted toward the track
+      m4.makeRotationY(-p2.heading + (p2.side > 0 ? Math.PI : 0));
+      m4.setPosition(p2.x, p2.z + 13.6, -p2.y);
+      heads.setMatrixAt(i, m4);
+      this.floodPositions.push(new Vector3(p2.x, p2.z + 13.6, -p2.y));
+    });
+    poles.instanceMatrix.needsUpdate = true;
+    heads.instanceMatrix.needsUpdate = true;
+    poles.castShadow = true;
+    this.scene.add(this.floodGroup);
+    // pool of real lights, repositioned to the poles nearest the camera
+    const poolSize = 5;
+    for (let i = 0; i < poolSize; i++) {
+      const l = new PointLight(0xfff2d0, 0, 110, 1.7);
+      this.scene.add(l);
+      this.floodLights.push({ light: l, idx: -1 });
+    }
+  }
+
+  /** Keep the live light pool on the poles nearest the camera. */
+  private updateFloodlights(): void {
+    if (this.floodPositions.length === 0) return;
+    // find nearest poles
+    const cam = this.camera.position;
+    const sorted = this.floodPositions
+      .map((p, i) => ({ d: p.distanceToSquared(cam), i }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, this.floodLights.length);
+    this.floodLights.forEach((fl, k) => {
+      const pick = sorted[k];
+      fl.light.position.copy(this.floodPositions[pick.i]);
+      fl.light.intensity = 1400;
+    });
   }
 
   // ------------------------------------------------------------ meshes
@@ -930,17 +1200,21 @@ export class View3D {
       }
       this.camera.rotateZ(this.driveChase ? 0 : -here.bank * 0.5);
       if (this.headlight) {
-        this.headlight.intensity = 260;
+        this.headlight.intensity = SKY_PRESETS[this.dayTime].floodlights ? 260 : 120;
         this.headlight.position.set(here.x, here.z + 4, -here.y);
       }
+      this.updateFloodlights();
     } else {
       if (this.headlight) this.headlight.intensity = 0;
       this.controls.enabled = true;
       this.controls.update();
       this.updateLabels();
       this.updateHover(performance.now());
+      this.updateFloodlights();
     }
-    this.renderer.render(this.scene, this.camera);
+    this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
+    this.sky.setTime(performance.now() / 1000);
+    this.composer.render();
   }
 }
 
@@ -960,24 +1234,6 @@ function estimateSpan(track: Track): number {
     if (s.y > maxY) maxY = s.y;
   }
   return Math.max(maxX - minX, maxY - minY, 400);
-}
-
-/** Vertical gradient sky dome as a background texture. */
-function makeSkyTexture(): CanvasTexture {
-  const cv = document.createElement("canvas");
-  cv.width = 4;
-  cv.height = 256;
-  const ctx = cv.getContext("2d")!;
-  const grad = ctx.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, "#16283f");
-  grad.addColorStop(0.45, "#31527a");
-  grad.addColorStop(0.72, "#7d9dbd");
-  grad.addColorStop(1, "#b8c9d6");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 4, 256);
-  const tex = new CanvasTexture(cv);
-  tex.colorSpace = SRGBColorSpace;
-  return tex;
 }
 
 /** Red/white curb striping (repeats along the curb via u coordinate). */
