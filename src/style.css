@@ -646,7 +646,7 @@ button.active {
 .day-control {
   position: absolute;
   right: 14px;
-  bottom: 48px;
+  top: 56px;
   z-index: 25;
   display: flex;
   gap: 3px;
@@ -671,4 +671,89 @@ button.active {
 }
 .day-control button:hover {
   color: #fff;
+}
+
+/* drive HUD */
+.drive-hud {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 28;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: end;
+  padding: 0 18px 96px 18px;
+  pointer-events: none;
+  font-family: ui-monospace, monospace;
+}
+.drive-hud .hud-left {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 260px;
+}
+.drive-hud .hud-speed {
+  font-size: 44px;
+  font-weight: 800;
+  color: #f2f3f5;
+  line-height: 1;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+}
+.drive-hud .hud-speed .unit {
+  font-size: 15px;
+  font-weight: 500;
+  color: #9aa3ad;
+}
+.drive-hud .hud-gear {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffb454;
+}
+.drive-hud .hud-rpmbar {
+  height: 7px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.drive-hud .hud-rpmfill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 60ms linear;
+}
+.drive-hud .hud-pedal {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  margin-top: 2px;
+}
+.drive-hud .hud-pedal.throttle { color: #58d858; }
+.drive-hud .hud-pedal.brake { color: #e04838; }
+.drive-hud .hud-pedal.coast { color: #8a94a2; }
+.drive-hud .hud-lap {
+  font-size: 12px;
+  color: #c8d0da;
+  margin-top: 2px;
+}
+.drive-hud .hud-place {
+  align-self: end;
+  text-align: center;
+  padding: 8px 18px;
+  transition: opacity 200ms;
+  background: rgba(10, 13, 17, 0.66);
+  border-radius: 10px;
+  margin-bottom: 24px;
+}
+.drive-hud .hud-place .name {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  font-style: italic;
+}
+.drive-hud .hud-place .kind {
+  font-size: 11px;
+  color: #9aa3ad;
+  letter-spacing: 0.08em;
+}
+.drive-hud .hud-map {
+  width: 200px;
+  height: 200px;
 }

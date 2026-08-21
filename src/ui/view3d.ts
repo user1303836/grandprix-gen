@@ -50,6 +50,7 @@ import { SkyDome, type SkyStyle } from "./sky";
 import { makeAsphaltTexture, makeGrassTexture, makeGravelTexture } from "./textures";
 import { buildFurniture } from "./furniture";
 import { CloudShadows, makeWaterMaterial } from "./water";
+import { DriveHUD } from "./driveHud";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
@@ -241,6 +242,7 @@ export class View3D {
     this.container.appendChild(fitBtn);
     this.fitBtn = fitBtn;
     this.setupDayControl();
+    this.hud = new DriveHUD(this.container);
 
     this.hemi = new AmbientLight(0xb4b8bc, 0.55);
     this.scene.add(this.hemi);
@@ -1090,7 +1092,10 @@ export class View3D {
   }
 
   private headlight: PointLight | null = null;
+  private baseFov = 55;
+  private driveActivePrev = false;
   private cloudShadows = new CloudShadows();
+  private hud: DriveHUD;
 
   // ---------------------------------------------------- hover tooltip
   private hoverRay = new Raycaster();
@@ -1241,6 +1246,11 @@ export class View3D {
   private tick(dt: number): void {
     const state = this.state;
     if (!state) return;
+    if (this.driveActive !== this.driveActivePrev) {
+      this.driveActivePrev = this.driveActive;
+      this.hud.setVisible(this.driveActive);
+      if (this.driveActive) this.baseFov = this.camera.fov;
+    }
     if (this.driveActive && state.track) {
       this.controls.enabled = false;
       // headlight so tunnels/unlit cuts read while driving
@@ -1267,6 +1277,20 @@ export class View3D {
         this.camera.lookAt(ahead.x, ahead.z + h * 0.6, -ahead.y);
       }
       this.camera.rotateZ(this.driveChase ? 0 : -here.bank * 0.5);
+      // FOV kick + roughness shake at speed
+      const kmh = v * 3.6;
+      const targetFov = this.baseFov + Math.min(11, Math.max(0, (kmh - 120) * 0.055));
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 5);
+      this.camera.updateProjectionMatrix();
+      const rough = state.track.props?.roughness?.[idx] ?? 0.2;
+      const shakeAmp = Math.min(0.34, (kmh / 330) * (0.05 + rough * 0.3)) * (this.driveChase ? 0.4 : 1);
+      if (shakeAmp > 0.01) {
+        const tSh = performance.now() / 1000;
+        this.camera.position.x += Math.sin(tSh * 37.3) * shakeAmp * 0.5;
+        this.camera.position.y += Math.sin(tSh * 51.7 + 1.3) * shakeAmp * 0.35;
+        this.camera.position.z += Math.sin(tSh * 43.1 + 2.9) * shakeAmp * 0.5;
+      }
+      this.hud.update(state, this.driveS, v, dt);
       if (this.headlight) {
         this.headlight.intensity = SKY_PRESETS[this.dayTime].floodlights ? 260 : 120;
         this.headlight.position.set(here.x, here.z + 4, -here.y);
@@ -1274,6 +1298,10 @@ export class View3D {
       this.updateFloodlights();
     } else {
       if (this.headlight) this.headlight.intensity = 0;
+      if (this.camera.fov !== this.baseFov) {
+        this.camera.fov += (this.baseFov - this.camera.fov) * Math.min(1, dt * 6);
+        this.camera.updateProjectionMatrix();
+      }
       this.controls.enabled = true;
       this.controls.update();
       this.updateLabels();
