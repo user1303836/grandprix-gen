@@ -104,9 +104,9 @@ export function makeMownGrassTexture(seed = 5150): CanvasTexture {
   cv.height = S;
   const ctx = cv.getContext("2d")!;
   const rnd = seededRandom(seed);
-  for (let band = 0; band < 8; band++) {
-    ctx.fillStyle = band % 2 === 0 ? "#e2e8d2" : "#d2dcbc";
-    ctx.fillRect(0, band * 32, S, 32);
+  for (let band = 0; band < 4; band++) {
+    ctx.fillStyle = band % 2 === 0 ? "#e8eed4" : "#ccd8ae";
+    ctx.fillRect(0, band * 64, S, 64);
   }
   // blade flecks
   for (let k = 0; k < 2600; k++) {

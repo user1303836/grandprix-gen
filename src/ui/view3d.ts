@@ -555,9 +555,9 @@ export class View3D {
       const gm = buildGridMesh(() => -0.08, -span / 2, -span / 2, span / 2, span / 2, 2, 2);
       const ground = this.gridMesh(gm.positions, gm.indices, 0x51683c);
       const gmat = ground.material as MeshStandardMaterial;
-      this.mownTex.repeat.set(span / 52, span / 52);
+      this.mownTex.repeat.set(1, 1); // world-scale uvs already tile it
       gmat.map = this.mownTex;
-      gmat.color.setHex(0x9aa87e);
+      gmat.color.setHex(0x93a273);
       ground.receiveShadow = true;
       this.trackGroup.add(ground);
     }
@@ -1245,8 +1245,8 @@ export class View3D {
     // world uvs for ground textures
     const uvs = new Float32Array(pos.length / 3 * 2);
     for (let i = 0; i < pos.length / 3; i++) {
-      uvs[i * 2] = pos[i * 3] / 52;
-      uvs[i * 2 + 1] = pos[i * 3 + 2] / 52;
+      uvs[i * 2] = pos[i * 3] / 208;
+      uvs[i * 2 + 1] = pos[i * 3 + 2] / 208;
     }
     geo.setAttribute("uv", new BufferAttribute(uvs, 2));
     geo.setIndex(new BufferAttribute(indices, 1));
