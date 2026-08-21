@@ -122,14 +122,14 @@ export function makeGantryTexture(): CanvasTexture {
 export function makeStandTexture(seed: number): CanvasTexture {
   const rnd = seeded(seed ^ 0x51ad);
   const cv = document.createElement("canvas");
-  cv.width = 256;
-  cv.height = 128;
+  cv.width = 64;
+  cv.height = 32;
   const ctx = cv.getContext("2d")!;
   ctx.fillStyle = "#3a3f46";
-  ctx.fillRect(0, 0, 256, 128);
+  ctx.fillRect(0, 0, 64, 32);
   const seatColors = ["#c84a3a", "#e8e4dc", "#3a6ab8", "#e8a83a", "#3aa85a", "#8a8f98"];
-  for (let row = 0; row < 8; row++) {
-    for (let col = 0; col < 32; col++) {
+  for (let row = 0; row < 2; row++) {
+    for (let col = 0; col < 8; col++) {
       if (rnd() < 0.82) {
         ctx.fillStyle = seatColors[Math.floor(rnd() * seatColors.length)];
         ctx.fillRect(col * 8 + 1, row * 16 + 3, 6, 9);
@@ -345,6 +345,8 @@ export function buildFurniture(track: Track): Group {
   // ---------- grandstands near the main straight -----------------------------
   {
     const seatTex = makeStandTexture(track.seed);
+    seatTex.wrapS = seatTex.wrapT = 1000; // RepeatWrapping
+    seatTex.repeat.set(7, 1);
     const nStands = 2 + Math.floor(rnd() * 2);
     for (let k = 0; k < nStands; k++) {
       const s = 40 + k * 55 + rnd() * 20;
@@ -462,6 +464,46 @@ export function buildFurniture(track: Track): Group {
       sign.rotation.y = -smp.heading + (side > 0 ? Math.PI : 0);
       sign.castShadow = true;
       group.add(sign);
+    }
+  }
+
+  // ---------- pit garages behind the pit lane ----------------------------------
+  {
+    const pit = (track.features ?? []).find((x) => x.kind === "pit-lane");
+    if (pit) {
+      const doorColors = [0xc83a2a, 0x2a5a9e, 0x3a9a5a, 0xe8a83a, 0x7a4a9e, 0x3aa8b8];
+      const nBoxes = 12;
+      const s0 = (pit.sStart + 20) % L;
+      const span = (pit.sEnd - 20 - (pit.sStart + 20) + L) % L;
+      for (let k = 0; k < nBoxes; k++) {
+        const sAt = (s0 + (span * k) / nBoxes) % L;
+        const i = Math.round(sAt / ds) % n;
+        const smp = track.samples[i];
+        const nx = -Math.sin(smp.heading);
+        const ny = Math.cos(smp.heading);
+        // boxes sit to the RIGHT of the pit lane (lane occupies wR+2..wR+9)
+        const offBox = -(track.props.widthR[i] + 16);
+        const px = smp.x + nx * offBox;
+        const py = smp.y + ny * offBox;
+        const pz = smp.z - offBox * Math.sin(smp.bank);
+        const box = new Mesh(
+          new BoxGeometry(9.5, 4.4, 7),
+          new MeshStandardMaterial({ color: 0xc9ccd2, roughness: 0.85 }),
+        );
+        box.position.set(px, pz + 2.05, -py);
+        box.rotation.y = -smp.heading;
+        box.castShadow = true;
+        group.add(box);
+        // colored roller door on the track-facing wall
+        const offDoor = offBox + 3.53;
+        const door = new Mesh(
+          new PlaneGeometry(6.8, 3.4),
+          new MeshStandardMaterial({ color: doorColors[k % doorColors.length], roughness: 0.6, side: DoubleSide }),
+        );
+        door.position.set(smp.x + nx * offDoor, pz + 1.75, -smp.y - ny * offDoor);
+        door.rotation.y = -smp.heading + Math.PI;
+        group.add(door);
+      }
     }
   }
 

@@ -469,6 +469,7 @@ export class View3D {
       this.trackGroup.add(this.cloudShadows.mesh);
       this.addTrees(state.terrain, track);
       this.addGrassTufts(state.terrain, track);
+      this.addBoulders(state.terrain, track);
       if (state.buildings && state.buildings.length > 0) {
         // seat buildings on the CARVED terrain so they don't float/sink
         // where the corridor flattens the ground
@@ -1520,6 +1521,48 @@ export class View3D {
       // hide when it's right on top of the camera
       if (d < 55) mat.opacity = 0;
     }
+  }
+
+  /** Boulders on steep slopes (they read as rock outcrops). */
+  private addBoulders(grid: TerrainGrid, track: Track): void {
+    const proximity = makeTrackProximity(track.samples);
+    const rng = new Rng(track.seed ^ 0xb01d);
+    const spots: { m: Matrix4; shade: number }[] = [];
+    const step = 3;
+    for (let iy = 2; iy < grid.height - 2; iy += step) {
+      for (let ix = 2; ix < grid.width - 2; ix += step) {
+        const x = grid.originX + (ix + rng.spread(0.5)) * grid.resolution;
+        const y = grid.originY + (iy + rng.spread(0.5)) * grid.resolution;
+        const slope = grid.slopeAt(x, y);
+        if (slope < 0.5) continue; // only steep ground
+        const z = grid.elevationAt(x, y);
+        if (!Number.isFinite(z) || z < 3) continue;
+        const near = proximity.nearest(x, y, 55);
+        if (near && near.d < 45) continue;
+        if (rng.next() < 0.6) continue;
+        const sc = 0.6 + rng.next() * 2.4;
+        const m = new Matrix4()
+          .makeRotationY(rng.range(0, Math.PI * 2))
+          .setPosition(x, z - sc * 0.3, -y)
+          .scale(new Vector3(sc, sc * (0.55 + rng.next() * 0.4), sc));
+        spots.push({ m, shade: rng.next() });
+        if (spots.length >= 900) break;
+      }
+      if (spots.length >= 900) break;
+    }
+    if (spots.length === 0) return;
+    const geo = new IcosahedronGeometry(1.6, 0);
+    const mat = new MeshStandardMaterial({ color: 0x7a7268, roughness: 1 });
+    const inst = new InstancedMesh(geo, mat, spots.length);
+    spots.forEach((sp, i) => {
+      inst.setMatrixAt(i, sp.m);
+      inst.setColorAt(i, new Color(0x7a7268).offsetHSL(0, 0, (sp.shade - 0.5) * 0.16));
+    });
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    inst.castShadow = true;
+    inst.name = "boulders";
+    this.trackGroup!.add(inst);
   }
 
   /** Small instanced grass tufts hugging the corridor (close-up richness). */
