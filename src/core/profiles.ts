@@ -415,12 +415,19 @@ function baseProfiles(input: CharacterInput, identity: CircuitIdentity, bank: Fl
     }
     runoffL[i] = rkL;
     runoffR[i] = rkR;
-    // faster corner = more runoff; straights get less; smooth low-freq variation
+    // speed/corner-aware envelope: big outside fast corners, extended at
+    // exits, small on straights; smooth low-freq variation on top
     const t = (i / n) * Math.PI * 2;
     const roNoise = 0.7 * Math.sin(2.3 * t + roP1) + 0.5 * Math.sin(4.7 * t + roP2);
-    const rwBase = 6 + cornerF * 9 + roNoise;
-    runoffWidthL[i] = rwBase;
-    runoffWidthR[i] = rwBase;
+    // approach speed from curvature (v ~ sqrt(mu*g*R))
+    const vEst = k > 1e-5 ? Math.sqrt((1.35 * 9.81) / Math.max(1e-5, k)) : 95;
+    const speedFactor = Math.min(1.6, (vEst / 55) ** 2 * 0.55);
+    const rwBase = 4.5 + cornerF * (5 + 9 * speedFactor) + roNoise;
+    // asymmetry: the EXIT side (outside of the corner) gets more
+    const dir = Math.sign(input.kappa[i]);
+    const exitBias = 1 + 0.28 * cornerF;
+    runoffWidthL[i] = rwBase * (dir > 0 ? 1 : exitBias);
+    runoffWidthR[i] = rwBase * (dir < 0 ? 1 : exitBias);
     // barriers (smooth variation; style sets the baseline)
     const bBase =
       identity.barrierStyle === "armco-close"

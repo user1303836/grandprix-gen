@@ -87,10 +87,10 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
       sliderRow("corner variety", { min: 0, max: 1, step: 0.01, value: p.cornerVariety, badge: "morph", format: P, onInput: morph("cornerVariety"), onCommit: morphCommit("cornerVariety") }),
       sliderRow("curvature severity", { min: 0, max: 1, step: 0.01, value: p.curvatureSeverity, badge: "morph", format: P, onInput: morph("curvatureSeverity"), onCommit: morphCommit("curvatureSeverity") }),
       sliderRow("long straight bias", { min: 0, max: 1, step: 0.01, value: p.longStraightBias, badge: "morph", format: P, onInput: morph("longStraightBias"), onCommit: morphCommit("longStraightBias") }),
-      sliderRow("hairpin freq", { min: 0, max: 1, step: 0.01, value: p.hairpinFreq, badge: "struct", format: P, onInput: () => {}, onCommit: struct("hairpinFreq") }),
-      sliderRow("sweeper freq", { min: 0, max: 1, step: 0.01, value: p.sweeperFreq, badge: "struct", format: P, onInput: () => {}, onCommit: struct("sweeperFreq") }),
-      sliderRow("esses freq", { min: 0, max: 1, step: 0.01, value: p.essesFreq, badge: "struct", format: P, onInput: () => {}, onCommit: struct("essesFreq") }),
-      sliderRow("chicane freq", { min: 0, max: 1, step: 0.01, value: p.chicaneFreq, badge: "struct", format: P, onInput: () => {}, onCommit: struct("chicaneFreq") }),
+      sliderRow("hairpin freq", { min: 0, max: 1, step: 0.01, value: p.hairpinFreq, badge: "morph", format: P, onInput: () => {}, onCommit: struct("hairpinFreq") }),
+      sliderRow("sweeper freq", { min: 0, max: 1, step: 0.01, value: p.sweeperFreq, badge: "morph", format: P, onInput: () => {}, onCommit: struct("sweeperFreq") }),
+      sliderRow("esses freq", { min: 0, max: 1, step: 0.01, value: p.essesFreq, badge: "morph", format: P, onInput: () => {}, onCommit: struct("essesFreq") }),
+      sliderRow("chicane freq", { min: 0, max: 1, step: 0.01, value: p.chicaneFreq, badge: "morph", format: P, onInput: () => {}, onCommit: struct("chicaneFreq") }),
     ], true),
   );
 
@@ -100,7 +100,7 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
       sliderRow("compactness", { min: 0, max: 1, step: 0.01, value: p.compactness, badge: "morph", format: P, onInput: morph("compactness"), onCommit: morphCommit("compactness") }),
       sliderRow("elongation", { min: 0, max: 1, step: 0.01, value: p.elongation, badge: "morph", format: P, onInput: morph("elongation"), onCommit: morphCommit("elongation") }),
       sliderRow("asymmetry", { min: 0, max: 1, step: 0.01, value: p.asymmetry, badge: "morph", format: P, onInput: morph("asymmetry"), onCommit: morphCommit("asymmetry") }),
-      sliderRow("left/right balance", { min: 0, max: 1, step: 0.01, value: p.leftRightBalance, badge: "struct", format: P, onInput: () => {}, onCommit: struct("leftRightBalance") }),
+      sliderRow("left/right balance", { min: 0, max: 1, step: 0.01, value: p.leftRightBalance, badge: "morph", format: P, onInput: () => {}, onCommit: struct("leftRightBalance") }),
     ], false),
   );
 
@@ -119,11 +119,45 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
   // ---------------------------------------------------------- identity
   wrap.append(
     section("Identity", [
-      sliderRow("heritage", { min: 0, max: 1, step: 0.01, value: p.heritage ?? 0.45, badge: "struct", format: P, onInput: () => {}, onCommit: struct("heritage") }),
-      sliderRow("feature richness", { min: 0, max: 1, step: 0.01, value: p.featureRichness ?? 0.65, badge: "struct", format: P, onInput: () => {}, onCommit: struct("featureRichness") }),
+      sliderRow("heritage", { min: 0, max: 1, step: 0.01, value: p.heritage ?? 0.45, badge: "morph", format: P, onInput: () => {}, onCommit: struct("heritage") }),
+      sliderRow("feature richness", { min: 0, max: 1, step: 0.01, value: p.featureRichness ?? 0.65, badge: "morph", format: P, onInput: () => {}, onCommit: struct("featureRichness") }),
       el("div", { className: "hint", textContent: "heritage: era/roughness/width variation tendencies. richness: how many distinctive named places (karussell, crests, wall runs…) the lap develops." }),
     ], false),
   );
+
+  // ---------------------------------------------------------- engineering
+  if (state.terrain) {
+    const body: HTMLElement[] = [];
+    const mkSelect = (label: string, key: string, options: string[], current: string) => {
+      const row = el("div", { className: "ctl" });
+      row.append(el("label", { textContent: label }));
+      const sel = el("select");
+      for (const o of options) {
+        const opt = el("option", { value: o, textContent: o });
+        if (o === current) opt.selected = true;
+        sel.append(opt);
+      }
+      sel.addEventListener("change", () => cb.onStructuralParam(key as keyof import("../core/types").TrackParams, sel.value));
+      row.append(sel);
+      return row;
+    };
+    body.push(mkSelect("civil style", "civilStyle", ["auto", "terrain-following", "heritage", "mountain-club", "modern", "viaduct-heavy", "megaproject"], p.civilStyle ?? "auto"));
+    body.push(mkSelect("feasibility", "civilFeasibility", ["auto", "realistic", "permissive", "megaproject"], p.civilFeasibility ?? "auto"));
+    body.push(sliderRow("construction budget", { min: 0, max: 1, step: 0.05, value: p.civilBudget < 0 ? 0.5 : p.civilBudget, badge: "morph", format: P, onInput: morph("civilBudget"), onCommit: morphCommit("civilBudget") }));
+    body.push(sliderRow("runoff standard", { min: 0, max: 1, step: 0.05, value: p.runoffStandard < 0 ? 0.5 : p.runoffStandard, badge: "morph", format: P, onInput: morph("runoffStandard"), onCommit: morphCommit("runoffStandard") }));
+    body.push(sliderRow("viaduct preference", { min: -1, max: 1, step: 0.1, value: p.viaductPref ?? 0, badge: "morph", format: P, onInput: morph("viaductPref"), onCommit: morphCommit("viaductPref") }));
+    body.push(sliderRow("platform preference", { min: -1, max: 1, step: 0.1, value: p.platformPref ?? 0, badge: "morph", format: P, onInput: morph("platformPref"), onCommit: morphCommit("platformPref") }));
+    body.push(sliderRow("tunnel preference", { min: -1, max: 1, step: 0.1, value: p.tunnelPref ?? 0, badge: "morph", format: P, onInput: morph("tunnelPref"), onCommit: morphCommit("tunnelPref") }));
+    const civ = state.track?.civil;
+    if (civ) {
+      const info = el("div", { className: "hint" });
+      info.textContent = `${civ.feasible ? "feasible" : "INFEASIBLE"} · cost ${civ.cost.toFixed(0)}/km · earth ${(civ.analysis.volumeCut / 1000).toFixed(0)}k/${(civ.analysis.volumeFill / 1000).toFixed(0)}k m³`;
+      if (!civ.feasible) info.style.color = "#e06848";
+      info.title = civ.violations.join("\n");
+      body.push(info);
+    }
+    wrap.append(section("Engineering", body, true));
+  }
 
   // ---------------------------------------------------------- places
   if (state.track && (state.track.features.length > 0 || (state.track.zones ?? []).length > 0)) {

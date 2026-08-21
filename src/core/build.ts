@@ -21,7 +21,9 @@ import { detectCorners, findStartFinish, makeSectors } from "./corners";
 import { designVerticalProfile, designTerrainProfile, conformToTerrain } from "./vertical";
 import { designCharacter } from "./profiles";
 import { Corridor } from "./corridor";
-import { defaultCivilControls, planCivil, rollCivilStyle, type CivilControls, type CivilPlan, type CivilStyle, type FeasibilityMode } from "./civil";
+import { RunoffKind } from "./character";
+import { summarizeViolations, validateCorridor } from "./corridorValidate";
+import { defaultCivilControls, planCivil, repairSpans, rollCivilStyle, type CivilControls, type CivilPlan, type CivilStyle, type FeasibilityMode } from "./civil";
 import { Rng } from "./prng";
 import {
   GENERATOR_VERSION,
@@ -231,7 +233,70 @@ export function buildTrack(
     const corridor = new Corridor(shim);
     const controls = civilControlsFromParams(params, seed);
     civil = planCivil(shim, corridor, opts.terrainSampler, controls, seed);
+    // repair: split rises out of elevated spans into cut kinds BEFORE
+    // validation (the repair is cheap; validation then judges the rest)
+    civil.spans = repairSpans(civil.spans, shim, corridor, opts.terrainSampler, ds);
     structures = civilSpansToLegacy(civil.spans);
+
+    // corridor-level validation: the finished cross-section against the
+    // terrain (and against itself). Violations mark the plan infeasible;
+    // the candidate search then reroutes/rejects instead of clipping.
+    let civilViolations = validateCorridor(shim, corridor, opts.terrainSampler, civil);
+    if (civilViolations.length > 0) {
+      // REPLAN once: penalize the misbehaving kinds and plan again
+      const penalty: Partial<Record<import("./civil").CivilKind, number>> = {};
+      for (const v of civilViolations) {
+        if (v.kind === "terrain-penetration") {
+          penalty.shelf = 2.5;
+          penalty.platform = 2.0;
+          penalty["open-cut"] = 0.8; // cuts become cheaper
+          penalty.retaining = 0.85;
+        }
+        if (v.kind === "insufficient-tunnel-cover") {
+          penalty.tunnel = 2.5;
+          penalty.gallery = 2.0;
+        }
+      }
+      const retry = planCivil(shim, corridor, opts.terrainSampler, { ...controls, extraPenalty: penalty }, seed ^ 0x9e37);
+      retry.spans = repairSpans(retry.spans, shim, corridor, opts.terrainSampler, ds);
+      const v2 = validateCorridor(shim, corridor, opts.terrainSampler, retry);
+      if (v2.length < civilViolations.length) {
+        civil = retry;
+        civilViolations = v2;
+        structures = civilSpansToLegacy(civil.spans);
+      }
+      if (civilViolations.length > 0) {
+        civil.feasible = false;
+        civil.violations = [...civil.violations, ...summarizeViolations(civilViolations).map((v) => `${v.kind}@${(v.s / 1000).toFixed(1)}k: ${v.detail}`)];
+      }
+    }
+
+    // runoff safety envelope, structure-aware: elevated corridors get
+    // shoulders + parapets (the deck never pretends to have full runoff);
+    // the user's runoff standard scales generosity on the ground
+    const roStd = controls.runoffStandard;
+    for (const sp of civil.spans) {
+      const elevated = sp.kind === "viaduct" || sp.kind === "short-bridge" || sp.kind === "shelf" || sp.kind === "platform";
+      const i0 = Math.round(sp.sStart / ds) % n;
+      const i1 = Math.round(sp.sEnd / ds) % n;
+      const spanLen = ((i1 - i0 + n) % n) || n;
+      for (let k = 0; k < spanLen; k++) {
+        const i = (i0 + k) % n;
+        if (elevated) {
+          props.runoffWidthL[i] = Math.min(props.runoffWidthL[i], 2.4);
+          props.runoffWidthR[i] = Math.min(props.runoffWidthR[i], 2.4);
+          if (props.runoffL[i] !== RunoffKind.Wall) props.runoffL[i] = RunoffKind.Shoulder;
+          if (props.runoffR[i] !== RunoffKind.Wall) props.runoffR[i] = RunoffKind.Shoulder;
+          props.barrierDistL[i] = Math.min(props.barrierDistL[i], 1.6);
+          props.barrierDistR[i] = Math.min(props.barrierDistR[i], 1.6);
+        } else {
+          // runoff standard: scale non-wall runoff around the identity baseline
+          const scale = 0.7 + roStd * 0.9;
+          props.runoffWidthL[i] = Math.max(1.4, props.runoffWidthL[i] * scale);
+          props.runoffWidthR[i] = Math.max(1.4, props.runoffWidthR[i] * scale);
+        }
+      }
+    }
     carveMask = new Uint8Array(n).fill(1);
     carveInner = new Float32Array(n).fill(40);
     for (const sp of civil.spans) {

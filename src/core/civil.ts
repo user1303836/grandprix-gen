@@ -59,6 +59,8 @@ export type FeasibilityMode = "realistic" | "permissive" | "megaproject";
 
 export interface CivilControls {
   style: CivilStyle;
+  /** planner-internal: extra per-kind penalties (replan rounds). */
+  extraPenalty?: Partial<Record<CivilKind, number>>;
   /** 0..1 budget level (low = austere, high = lavish). */
   budget: number;
   feasibility: FeasibilityMode;
@@ -521,8 +523,35 @@ export function planCivil(
       const kind = CIVIL_KINDS[k];
       const base = localCost(kind, m, ctx);
       if (!Number.isFinite(base)) continue;
-      local[i * S + k] = base * (prefs[kind] ?? 1) * speedPenalty(kind, si) * guard(kind) * nudge(kind) * budgetPrice(kind, base);
+      local[i * S + k] = base * (prefs[kind] ?? 1) * speedPenalty(kind, si) * guard(kind) * nudge(kind) * budgetPrice(kind, base) * (controls.extraPenalty?.[kind] ?? 1);
     }
+  }
+
+  // fallback: a station where NOTHING is legal must still get a (very
+  // expensive) state, or the whole DP dies
+  for (let i = 0; i < 2 * n; i++) {
+    let any = false;
+    for (let k = 0; k < S; k++) {
+      if (Number.isFinite(local[i * S + k])) {
+        any = true;
+        break;
+      }
+    }
+    if (any) continue;
+    const si = i % n;
+    const m = analysis.stations[si];
+    // physically, the corridor must be one of: cut through, fill under,
+    // or platform over mixed ground -- priced punitively
+    const fb: [CivilKind, number][] = [
+      ["dual-retaining", 380 + m.maxCut * 4],
+      ["platform", 420 + m.maxFill * 4],
+      ["open-cut", 400 + m.maxCut * 4],
+      ["viaduct", 450 + m.maxFill * 4],
+      ["at-grade", 500],
+    ];
+    fb.sort((a, b) => a[1] - b[1]);
+    const kind = fb[0][0];
+    local[i * S + CIVIL_KINDS.indexOf(kind)] = fb[0][1] * (prefs[kind] ?? 1);
   }
 
   // transition costs: discourage oscillation; some transitions are natural
@@ -639,6 +668,7 @@ export function planCivil(
     }
     return out;
   };
+  const unmergeable = new Set<number>();
   for (let iter = 0; iter < 240; iter++) {
     const runs = buildRuns();
     const runLen = (r: Run) => ((((r.i1 - r.i0) % n) + n) % n || n) * track.ds;
@@ -647,7 +677,7 @@ export function planCivil(
     for (let r = 0; r < runs.length; r++) {
       const lenM = runLen(runs[r]);
       const minM = MIN_LEN[runs[r].kind] ?? 24;
-      if (lenM < minM && lenM < targetMin) {
+      if (lenM < minM && lenM < targetMin && !unmergeable.has(runs[r].i0)) {
         target = r;
         targetMin = lenM;
       }
@@ -656,13 +686,39 @@ export function planCivil(
     const run = runs[target];
     const prev = runs[(target - 1 + runs.length) % runs.length];
     const next = runs[(target + 1) % runs.length];
+    // never absorb into a kind that is INFEASIBLE at these stations
+    const allowed = (kind: CivilKind): boolean => {
+      let i = run.i0;
+      let guard3 = 0;
+      while (i !== run.i1 && guard3++ < n) {
+        if (!Number.isFinite(localCost(kind, analysis.stations[i], ctx))) return false;
+        i = (i + 1) % n;
+      }
+      return true;
+    };
     const m0 = analysis.stations[run.i0];
-    const into =
-      prev.kind === next.kind
-        ? prev.kind
-        : localCost(prev.kind, m0, ctx) <= localCost(next.kind, m0, ctx)
-          ? prev.kind
-          : next.kind;
+    let into: CivilKind;
+    if (prev.kind === next.kind) {
+      into = allowed(prev.kind) ? prev.kind : run.kind;
+    } else {
+      const prevOk = allowed(prev.kind);
+      const nextOk = allowed(next.kind);
+      into =
+        prevOk && nextOk
+          ? localCost(prev.kind, m0, ctx) <= localCost(next.kind, m0, ctx)
+            ? prev.kind
+            : next.kind
+          : prevOk
+            ? prev.kind
+            : nextOk
+              ? next.kind
+              : run.kind; // keep the short run: neither neighbor is legal here
+    }
+    if (into === run.kind) {
+      // this run cannot merge legally; try the next-shortest
+      unmergeable.add(run.i0);
+      continue;
+    }
     let i = run.i0;
     let guard2 = 0;
     while (i !== run.i1 && guard2++ < n) {
@@ -756,6 +812,110 @@ export function planCivil(
     feasible: violations.length === 0,
     violations,
   };
+}
+
+/**
+ * Repair pass: elevated spans must not swallow rises the road cuts
+ * through. Any sub-run of an elevated/platform span where the corridor
+ * surface sits below ground is split off into a cut kind (open-cut if
+ * shallow, retaining if deep), so the terrain gets carved open there.
+ * Returns new spans (or the input if nothing needed repair).
+ */
+export function repairSpans(
+  spans: CivilSpan[],
+  track: Track,
+  corridor: Corridor,
+  ground: (x: number, y: number) => number,
+  ds: number,
+): CivilSpan[] {
+  const CUT_OK: CivilKind[] = ["open-cut", "retaining", "dual-retaining", "bench", "tunnel", "gallery", "at-grade", "embankment", "terraced"];
+  const out: CivilSpan[] = [];
+  const n = track.samples.length;
+  for (const sp of spans) {
+    if (CUT_OK.includes(sp.kind)) {
+      out.push(sp);
+      continue;
+    }
+    // find penetrating sub-runs
+    const i0 = Math.round(sp.sStart / ds);
+    const i1 = Math.round(sp.sEnd / ds);
+    const len = ((i1 - i0) % n + n) % n || n;
+    interface Sub {
+      pen: boolean;
+      k0: number;
+      k1: number;
+    }
+    const subs: Sub[] = [];
+    let cur = false;
+    let k0 = 0;
+    for (let k = 0; k <= len; k++) {
+      const i = (i0 + k) % n;
+      let pen = false;
+      if (k < len) {
+        const smp = track.samples[i];
+        const plat = corridor.platformHalf(i);
+        const nx = -Math.sin(smp.heading);
+        const ny = Math.cos(smp.heading);
+        for (const off of [-plat.l, -plat.l * 0.5, 0, plat.r * 0.5, plat.r]) {
+          const surf = corridor.surface(i * ds, off);
+          const g = ground(smp.x + nx * off, smp.y + ny * off);
+          if (Number.isFinite(g) && surf.z < g - 1.8) {
+            pen = true;
+            break;
+          }
+        }
+      }
+      if (pen !== cur || k === len) {
+        subs.push({ pen: cur, k0, k1: k });
+        cur = pen;
+        k0 = k;
+      }
+    }
+    if (subs.every((sb) => !sb.pen)) {
+      out.push(sp);
+      continue;
+    }
+    for (const sb of subs) {
+      if (sb.k1 - sb.k0 < 2) continue;
+      const sA = ((i0 + sb.k0) % n) * ds;
+      const sB = ((i0 + sb.k1) % n) * ds;
+      if (!sb.pen) {
+        out.push({ ...sp, sStart: sA, sEnd: sB, seed: sp.seed + sb.k0 });
+        continue;
+      }
+      // repair: choose the cut kind by depth
+      let deep = 0;
+      for (let k = sb.k0; k < sb.k1; k++) {
+        const i = (i0 + k) % n;
+        const g = ground(track.samples[i].x, track.samples[i].y);
+        if (Number.isFinite(g)) deep = Math.max(deep, g - track.samples[i].z);
+      }
+      out.push({
+        kind: deep > 6 ? "retaining" : "open-cut",
+        sStart: sA,
+        sEnd: sB,
+        maxFill: 0,
+        maxCut: deep,
+        maxHeight: 0,
+        side: sp.side,
+        seed: sp.seed + sb.k0 + 1,
+      });
+    }
+  }
+  // merge adjacent same-kind
+  const merged: CivilSpan[] = [];
+  for (const sp of out) {
+    const last = merged[merged.length - 1];
+    if (last && last.kind === sp.kind) {
+      last.sEnd = sp.sEnd;
+      last.maxCut = Math.max(last.maxCut, sp.maxCut);
+      last.maxFill = Math.max(last.maxFill, sp.maxFill);
+      last.maxHeight = Math.max(last.maxHeight, sp.maxHeight);
+    } else {
+      merged.push({ ...sp });
+    }
+  }
+  return merged;
 }
 
 /** Default controls from a rolled style (user-overridable pieces). */
