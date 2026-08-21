@@ -2061,7 +2061,7 @@ export class View3D {
     this.cloudShadows.setTime(tNow);
     this.valleyMist.setTime(tNow);
     // mist strongest at dusk/night, faint at golden, none at noon
-    const mistTarget = this.dayTime === "dusk" ? 0.34 : this.dayTime === "night" ? 0.26 : this.dayTime === "golden" ? 0.12 : 0;
+    const mistTarget = this.dayTime === "dusk" ? 0.28 : this.dayTime === "night" ? 0.17 : this.dayTime === "golden" ? 0.12 : 0;
     this.valleyMist.lerpStrength(mistTarget, Math.min(1, dt));
     this.updateFlare();
     this.windTime.value = tNow;
