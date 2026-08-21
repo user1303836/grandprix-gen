@@ -312,6 +312,43 @@ export function buildFurniture(track: Track): Group {
     }
   }
 
+  // ---------- tire walls at heavy braking zones -------------------------------
+  {
+    // stacks of red/white tires where you really don't want to arrive
+    const tireGeo = new CylinderGeometry(0.72, 0.72, 0.62, 10, 1, true);
+    const redMat = new MeshStandardMaterial({ color: 0xb8302a, roughness: 0.92, side: DoubleSide });
+    const whiteMat = new MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.92, side: DoubleSide });
+    const L2 = track.length;
+    for (const c of track.corners) {
+      if (c.minRadius > 90) continue; // only the heavy stuff
+      const side = c.direction === "L" ? -1 : 1; // outside of the corner
+      // wall spans from just before the apex to the exit
+      const s0 = (c.sApex - 30 + L2) % L2;
+      const s1 = (c.sEnd + 26) % L2;
+      const len = ((s1 - s0 + L2) % L2) || 1;
+      const step = Math.max(1, Math.round(1.55 / ds));
+      let k = 0;
+      for (let ss = 0; ss < len; ss += step) {
+        const sAt = (s0 + ss) % L2;
+        const i = Math.round(sAt / ds) % n;
+        const { nx, ny, off } = offsetOf(track, i, side, 7.5);
+        const smp = track.samples[i];
+        const px = smp.x + nx * off;
+        const py = smp.y + ny * off;
+        const pz = smp.z - off * Math.sin(smp.bank);
+        // two-high stack, slight jitter so the wall looks handmade
+        for (let lvl = 0; lvl < 2; lvl++) {
+          const tire = new Mesh(tireGeo, (k + lvl) % 2 === 0 ? redMat : whiteMat);
+          tire.position.set(px + (rnd() - 0.5) * 0.14, pz + 0.31 + lvl * 0.62, -py + (rnd() - 0.5) * 0.14);
+          tire.rotation.y = rnd() * Math.PI;
+          tire.castShadow = true;
+          group.add(tire);
+        }
+        k++;
+      }
+    }
+  }
+
   // ---------- marshal posts ---------------------------------------------------
   {
     const hutGeo = new BoxGeometry(1.6, 2.2, 1.6);

@@ -1039,6 +1039,25 @@ export class View3D {
     leafGeo.translate(0, 5.2, 0);
     leafGeo.scale(1, 1.25, 1);
     const leafMat = new MeshStandardMaterial({ color: 0x517434, roughness: 1 });
+    // gentle wind sway (vertex shader wobble, phase from instance matrix)
+    for (const m of [coneMat, leafMat]) {
+      m.onBeforeCompile = (shader) => {
+        shader.uniforms.uTime = this.windTime;
+        shader.vertexShader = shader.vertexShader
+          .replace("#include <common>", "#include <common>\nuniform float uTime;")
+          .replace(
+            "#include <begin_vertex>",
+            `#include <begin_vertex>
+            #ifdef USE_INSTANCING
+              vec2 wpos = vec2(instanceMatrix[3][0], instanceMatrix[3][2]);
+              float wphase = wpos.x * 0.07 + wpos.y * 0.11;
+              float sway = sin(uTime * 1.3 + wphase) * 0.5 + sin(uTime * 2.1 + wphase * 1.7) * 0.3;
+              transformed.x += sway * max(0.0, transformed.y - 2.0) * 0.09;
+              transformed.z += sway * max(0.0, transformed.y - 2.0) * 0.05;
+            #endif`,
+          );
+      };
+    }
 
     const total = conifers.length + leafies.length;
     const trunks = new InstancedMesh(trunkGeo, trunkMat, total);
@@ -1174,6 +1193,7 @@ export class View3D {
   private baseFov = 55;
   private driveActivePrev = false;
   private cloudShadows = new CloudShadows();
+  private windTime = { value: 0 };
   private hud: DriveHUD;
 
   // ---------------------------------------------------- hover tooltip
@@ -1396,6 +1416,7 @@ export class View3D {
     this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.sky.setTime(tNow);
     this.cloudShadows.setTime(tNow);
+    this.windTime.value = tNow;
     this.updateWetness(dt);
     this.rain.update(dt, this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.trackGroup?.traverse((o) => {
