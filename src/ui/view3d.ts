@@ -181,10 +181,10 @@ const SKY_PRESETS: Record<DayTime, SkyPreset> = {
     floodlights: true,
   },
   night: {
-    sunElevation: -9, sunAzimuth: 262, sunColor: 0x7a92cc, sunIntensity: 0.42,
-    ambientColor: 0x44548a, ambientIntensity: 0.85,
+    sunElevation: -9, sunAzimuth: 262, sunColor: 0x8aa2d8, sunIntensity: 0.6,
+    ambientColor: 0x5a6a9a, ambientIntensity: 1.1,
     turbidity: 3, rayleigh: 0.4, mieCoefficient: 0.001, mieDirectionalG: 0.7,
-    fogColor: 0x0e1624, fogNearK: 2.4, fogFarK: 8, exposure: 0.95, bloom: 0.75,
+    fogColor: 0x16202e, fogNearK: 2.6, fogFarK: 9, exposure: 1.0, bloom: 0.75,
     floodlights: true,
   },
 };
