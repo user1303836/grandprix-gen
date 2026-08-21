@@ -47,6 +47,7 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
 import { makeAsphaltTexture, makeGrassTexture, makeGravelTexture } from "./textures";
+import { buildFurniture } from "./furniture";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
@@ -377,6 +378,7 @@ export class View3D {
       this.addStructureMeshes(track, state.terrain);
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
+      this.trackGroup.add(buildFurniture(track));
       this.maybeFitCamera(track, state.terrain);
       this.rebuildFloodlights();
     }
