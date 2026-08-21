@@ -210,6 +210,7 @@ export class View3D {
   private sky: SkyDome;
   private dayTime: DayTime = "noon";
   private weather: Weather = "dry";
+  private season: "summer" | "autumn" = "summer";
   private rain = new RainSystem();
   private cars: { group: Group; s: number; factor: number }[];
   private spray: SpraySystem;
@@ -268,6 +269,7 @@ export class View3D {
     this.scene.add(this.rain.points);
     this.setupWeatherControl();
     this.setupCamControl();
+    this.setupSeasonControl();
     this.cars = [
       { group: buildCar(0x2a52c8), s: 0, factor: 1 },
       { group: buildCar(0xc83a2a), s: 0.4, factor: 1.045 },
@@ -361,6 +363,7 @@ export class View3D {
     if (this.fitBtn) this.fitBtn.style.display = v ? "block" : "none";
     if (this.dayControl) this.dayControl.style.display = v ? "flex" : "none";
     if (this.weatherControl) this.weatherControl.style.display = v ? "flex" : "none";
+    if (this.seasonControl) this.seasonControl.style.display = v ? "flex" : "none";
     if (!v && this.hoverEl) this.hoverEl.style.display = "none";
     if (v && this.needsRebuild && this.state) {
       this.rebuildScene(this.state);
@@ -780,6 +783,27 @@ export class View3D {
     this.controls.autoRotateSpeed = 0.55;
   }
 
+  private seasonControl: HTMLDivElement | null = null;
+  private setupSeasonControl(): void {
+    const wrap = document.createElement("div");
+    wrap.className = "day-control season-control";
+    for (const m of ["summer", "autumn"] as const) {
+      const b = document.createElement("button");
+      b.textContent = m === "summer" ? "\u{1F331} summer" : "\u{1F342} autumn";
+      b.dataset.season = m;
+      if (m === this.season) b.classList.add("active");
+      b.addEventListener("click", () => {
+        this.season = m;
+        wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+        if (this.state) this.rebuildScene(this.state);
+      });
+      wrap.appendChild(b);
+    }
+    wrap.style.display = "none";
+    this.container.appendChild(wrap);
+    this.seasonControl = wrap;
+  }
+
   /** Drive camera: cockpit / chase / tv. */
   private camControl: HTMLDivElement | null = null;
   private setupCamControl(): void {
@@ -1148,6 +1172,7 @@ export class View3D {
       pos[i + 2] = -y;
       const t = (z - zMin) / (zMax - zMin);
       const slope = grid.slopeAt(x, y);
+      const autumnShift = this.season === "autumn" ? 1 : 0;
       // hypsometric albedo: forest -> olive -> dry -> rock -> pale summits
       let r: number, g: number, b: number;
       if (t < 0.45) {
@@ -1166,6 +1191,15 @@ export class View3D {
         r = 0.42 + u * 0.22;
         g = 0.36 + u * 0.22;
         b = 0.2 + u * 0.22;
+      }
+      if (autumnShift) {
+        // turn greens toward rust/straw
+        const r2 = r * 1.5 + 0.08;
+        const g2 = g * 0.82 + 0.02;
+        const b2 = b * 0.55;
+        r = Math.min(1, r2);
+        g = Math.min(1, g2);
+        b = b2;
       }
       // steep ground reads as rock regardless of elevation
       const rocky = Math.max(0, Math.min(1, (slope - 0.35) * 2.2));
@@ -1263,11 +1297,14 @@ export class View3D {
     const trunkMat = new MeshStandardMaterial({ color: 0x4a3826, roughness: 1 });
     const coneGeo = new ConeGeometry(2.5, 8.5, 6);
     coneGeo.translate(0, 6.6, 0);
-    const coneMat = new MeshStandardMaterial({ color: 0x3d6132, roughness: 1 });
+    const autumn = this.season === "autumn";
+    const coneBase = autumn ? 0x7a5c22 : 0x3d6132;
+    const leafBase = autumn ? 0xb87a2e : 0x517434;
+    const coneMat = new MeshStandardMaterial({ color: coneBase, roughness: 1 });
     const leafGeo = new IcosahedronGeometry(3.4, 1);
     leafGeo.translate(0, 5.2, 0);
     leafGeo.scale(1, 1.25, 1);
-    const leafMat = new MeshStandardMaterial({ color: 0x517434, roughness: 1 });
+    const leafMat = new MeshStandardMaterial({ color: leafBase, roughness: 1 });
     // gentle wind sway (vertex shader wobble, phase from instance matrix)
     for (const m of [coneMat, leafMat]) {
       m.onBeforeCompile = (shader) => {
@@ -1297,12 +1334,12 @@ export class View3D {
       trunks.setMatrixAt(ti++, c.m);
       cones.setMatrixAt(i, c.m);
       // slight per-instance color variation
-      cones.setColorAt(i, new Color(0x3d6132).offsetHSL(0, 0, (c.s - 1) * 0.08));
+      cones.setColorAt(i, new Color(coneBase).offsetHSL(autumn ? 0.03 : 0, 0, (c.s - 1) * 0.08));
     });
     leafies.forEach((c, i) => {
       trunks.setMatrixAt(ti++, c.m);
       leaves.setMatrixAt(i, c.m);
-      leaves.setColorAt(i, new Color(0x517434).offsetHSL((c.s - 1) * 0.04, 0, (c.s - 1) * 0.07));
+      leaves.setColorAt(i, new Color(leafBase).offsetHSL((c.s - 1) * (autumn ? 0.06 : 0.04), 0, (c.s - 1) * 0.07));
     });
     trunks.instanceMatrix.needsUpdate = true;
     cones.instanceMatrix.needsUpdate = true;
@@ -1730,11 +1767,11 @@ export class View3D {
     if (spots.length === 0) return;
     const tuftGeo = new ConeGeometry(0.55, 1.5, 4);
     tuftGeo.translate(0, 0.7, 0);
-    const tuftMat = new MeshStandardMaterial({ color: 0x4a6a2e, roughness: 1 });
+    const tuftMat = new MeshStandardMaterial({ color: this.season === "autumn" ? 0x8a722e : 0x4a6a2e, roughness: 1 });
     const inst = new InstancedMesh(tuftGeo, tuftMat, spots.length);
     spots.forEach((m, i) => {
       inst.setMatrixAt(i, m);
-      inst.setColorAt(i, new Color(0x4a6a2e).offsetHSL(rng.spread(0.03), 0, rng.spread(0.09)));
+      inst.setColorAt(i, new Color(this.season === "autumn" ? 0x8a722e : 0x4a6a2e).offsetHSL(rng.spread(0.03), 0, rng.spread(0.09)));
     });
     inst.instanceMatrix.needsUpdate = true;
     if (inst.instanceColor) inst.instanceColor.needsUpdate = true;

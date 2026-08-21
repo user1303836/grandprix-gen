@@ -765,3 +765,13 @@ button.active {
 .cam-control {
   top: 136px;
 }
+
+.season-control {
+  top: 96px;
+}
+.weather-control {
+  top: 136px;
+}
+.cam-control {
+  top: 176px;
+}
