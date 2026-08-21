@@ -42,6 +42,7 @@ import {
   IcosahedronGeometry,
   PlaneGeometry,
   CircleGeometry,
+  Quaternion,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -1020,15 +1021,14 @@ export class View3D {
     heads.instanceMatrix.needsUpdate = true;
     poles.castShadow = true;
     // volumetric-ish light shafts: additive translucent cones under each head
-    const shaftGeo = new ConeGeometry(5.2, 13.5, 12, 1, true);
-    shaftGeo.translate(0, -6.75, 0);
+    const shaftGeo = new ConeGeometry(4.2, 11.5, 12, 1, true);
+    shaftGeo.translate(0, -5.75, 0);
     const shaftMat = new MeshBasicMaterial({
       color: 0xffeecc,
       transparent: true,
-      opacity: 0.055,
+      opacity: 0.032,
       blending: AdditiveBlending,
       depthWrite: false,
-      side: DoubleSide,
     });
     const shafts = new InstancedMesh(shaftGeo, shaftMat, positions.length);
     positions.forEach((p2, i) => {
@@ -1037,6 +1037,8 @@ export class View3D {
     });
     shafts.instanceMatrix.needsUpdate = true;
     shafts.renderOrder = 40;
+    this.shaftMesh = shafts;
+    this.shaftBase = positions.map((p2) => new Vector3(p2.x, p2.z + 13.6, -p2.y));
     this.floodGroup.add(shafts);
     this.scene.add(this.floodGroup);
     // pool of real lights, repositioned to the poles nearest the camera
@@ -1049,6 +1051,8 @@ export class View3D {
   }
 
   /** Keep the live light pool on the poles nearest the camera. */
+  private shaftMesh: InstancedMesh | null = null;
+  private shaftBase: Vector3[] = [];
   private updateFloodlights(): void {
     if (this.floodPositions.length === 0) return;
     // find nearest poles
@@ -1062,6 +1066,20 @@ export class View3D {
       fl.light.position.copy(this.floodPositions[pick.i]);
       fl.light.intensity = 1400;
     });
+    // hide shafts near the camera (additive cones blow out up close)
+    if (this.shaftMesh) {
+      const m4 = new Matrix4();
+      const sc = new Vector3();
+      const q = new Quaternion();
+      this.shaftBase.forEach((p, i) => {
+        const d = p.distanceTo(this.camera.position);
+        const k = d < 26 ? 0.0001 : d < 60 ? (d - 26) / 34 : 1;
+        sc.setScalar(k);
+        m4.compose(p, q, sc);
+        this.shaftMesh!.setMatrixAt(i, m4);
+      });
+      this.shaftMesh.instanceMatrix.needsUpdate = true;
+    }
   }
 
   // ------------------------------------------------------------ meshes

@@ -7,10 +7,27 @@ import {
   AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
+  CanvasTexture,
   Color,
   Points,
   PointsMaterial,
 } from "three";
+
+let dotTex: CanvasTexture | null = null;
+function softDot(): CanvasTexture {
+  if (dotTex) return dotTex;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 64;
+  const ctx = cv.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  g.addColorStop(0, "rgba(255,255,255,0.85)");
+  g.addColorStop(0.5, "rgba(255,255,255,0.32)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  dotTex = new CanvasTexture(cv);
+  return dotTex;
+}
 
 const MAX = 700;
 
@@ -30,6 +47,8 @@ export class SpraySystem {
     const mat = new PointsMaterial({
       color: new Color(0xb8c4cc),
       size: 1.05,
+      map: softDot(),
+      alphaMap: softDot(),
       transparent: true,
       opacity: 0.2,
       blending: AdditiveBlending,
