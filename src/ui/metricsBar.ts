@@ -48,6 +48,13 @@ export function buildStatusBar(state: AppState): HTMLElement {
   bar.append(cell("MAX GRADE", `${m.maxGradePct.toFixed(1)}%`));
   bar.append(cell("ERA", m.era));
   bar.append(cell("PLACES", `${m.featureCount}`));
+  if (m.structureM && (m.structureM.bridge > 10 || m.structureM.tunnel > 10)) {
+    const bits: string[] = [];
+    if (m.structureM.bridge > 10) bits.push(`B ${(m.structureM.bridge / 1000).toFixed(1)}k`);
+    if (m.structureM.tunnel > 10) bits.push(`T ${(m.structureM.tunnel / 1000).toFixed(1)}k`);
+    if (m.structureM["rock-cut"] > 10) bits.push(`C ${(m.structureM["rock-cut"] / 1000).toFixed(1)}k`);
+    bar.append(cell("STRUCT", bits.join(" ")));
+  }
   bar.append(cell("SURF DIV", m.surfaceDiversity.toFixed(0)));
   bar.append(cell("WIDTH Δ", `±${(m.widthRange / 2).toFixed(1)} m`));
   if (m.meanAbsCutFill > 0.01) {

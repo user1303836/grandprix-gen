@@ -4,6 +4,7 @@
  */
 
 import { el, section, sliderRow } from "./dom";
+import { FeatureColors, FeatureLabels, ZoneLabels } from "../core/character";
 import { MORPHABLE_PARAMS, type TrackParams } from "../core/types";
 import type { AppState } from "./state";
 
@@ -20,6 +21,7 @@ export interface SidebarCallbacks {
   onLockRegen: () => void;
   onClearSite: () => void;
   onPlaceJump: (feature: import("../core/character").TrackFeature) => void;
+
 }
 
 const P = (v: number) => `${Math.round(v * 100)}`;
@@ -124,14 +126,26 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
   );
 
   // ---------------------------------------------------------- places
-  if (state.track && state.track.features.length > 0) {
-    const list = el("div", { className: "history-list", style: "max-height:180px" });
-    for (const f of state.track.features) {
+  if (state.track && (state.track.features.length > 0 || (state.track.zones ?? []).length > 0)) {
+    const list = el("div", { className: "history-list", style: "max-height:200px" });
+    for (const z of state.track.zones ?? []) {
+      const dot = el("span", { className: "place-dot" });
+      dot.style.background = "#8a97a8";
       const item = el("div", { className: "history-item" }, [
-        el("span", { textContent: f.name }),
+        el("span", {}, [dot, el("span", { textContent: z.name, style: "color:#9aa8b8;font-style:italic" })]),
+        el("span", { textContent: `${(z.sStart / 1000).toFixed(1)}k` }),
+      ]);
+      item.title = `section · ${ZoneLabels[z.kind]} · ${z.sStart.toFixed(0)}–${z.sEnd.toFixed(0)} m`;
+      list.append(item);
+    }
+    for (const f of state.track.features) {
+      const dot = el("span", { className: "place-dot" });
+      dot.style.background = FeatureColors[f.kind];
+      const item = el("div", { className: "history-item" }, [
+        el("span", {}, [dot, el("span", { textContent: f.name })]),
         el("span", { textContent: `${(f.sStart / 1000).toFixed(1)}k` }),
       ]);
-      item.title = `${f.kind} · station ${f.sStart.toFixed(0)}–${f.sEnd.toFixed(0)} m`;
+      item.title = `${FeatureLabels[f.kind]} · station ${f.sStart.toFixed(0)}–${f.sEnd.toFixed(0)} m`;
       item.addEventListener("click", () => cb.onPlaceJump(f));
       list.append(item);
     }

@@ -10,12 +10,14 @@ import { gradeLimit } from "./vertical";
 import { smoothCircular } from "./geometry";
 import {
   generateFeatures,
+  generateZones,
   elementRangesFor,
   rollIdentity,
   KerbKind,
   RunoffKind,
   SurfaceKind,
   type CircuitIdentity,
+  type CircuitZone,
   type TrackFeature,
 } from "./character";
 import type { AlignmentElement, Corner, PropertyProfiles, TrackParams } from "./types";
@@ -40,6 +42,7 @@ export interface CharacterInput {
 export interface CharacterResult {
   identity: CircuitIdentity;
   features: TrackFeature[];
+  zones: CircuitZone[];
   props: PropertyProfiles;
   /** z after geometry features (crests/jumps/compressions). */
   z: Float64Array;
@@ -60,6 +63,27 @@ export function designCharacter(input: CharacterInput): CharacterResult {
   // ---- base profiles ---------------------------------------------------------
   const props = baseProfiles(input, identity, bank);
 
+  // ---- sector-scale zones (kilometer axis) -------------------------------------
+  const ranges0 = elementRangesFor(input.elements, L);
+  const relief0 = ranges0.map((r) => {
+    const i0 = Math.floor(r.s0 / ds) % n;
+    const i1 = Math.floor(r.s1 / ds) % n;
+    const ref = Number.isFinite(input.groundZ[0]) ? input.groundZ : input.z;
+    let mn = Infinity;
+    let mx = -Infinity;
+    let i = i0;
+    let guard = 0;
+    while (i !== i1 && guard++ < n) {
+      const v = ref[i];
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+      i = (i + 1) % n;
+    }
+    return Number.isFinite(mn) ? mx - mn : 0;
+  });
+  const zones = generateZones(seed, identity, ranges0, relief0, L);
+  applyZoneBiases(props, zones, input, ds, n);
+
   // ---- features --------------------------------------------------------------
   const ranges = elementRangesFor(input.elements, L);
   const reliefPerElement = ranges.map((r) => {
@@ -79,6 +103,12 @@ export function designCharacter(input: CharacterInput): CharacterResult {
     return Number.isFinite(mn) ? mx - mn : 0;
   });
 
+  const slopePerElement = ranges.map((r) => {
+    const i0 = Math.floor(r.s0 / ds) % n;
+    const i1 = Math.floor(r.s1 / ds) % n;
+    const ref = Number.isFinite(input.groundZ[0]) ? input.groundZ : input.z;
+    return (ref[i1] - ref[i0]) / Math.max(20, r.s1 - r.s0);
+  });
   const features = generateFeatures({
     seed,
     params,
@@ -88,6 +118,7 @@ export function designCharacter(input: CharacterInput): CharacterResult {
     elementRanges: ranges,
     totalLength: L,
     reliefPerElement,
+    slopePerElement,
   });
 
   // map features to s ranges (also stored on the feature for UI/export)
@@ -153,10 +184,68 @@ export function designCharacter(input: CharacterInput): CharacterResult {
         windowScale(dir > 0 ? widthL : widthR, s0, s1, ds, n, 1 + 0.08 * f.strength, 30);
         break;
       }
-      case "wall-run": {
+      case "wall-run":
+      case "retaining-run": {
         const sc = 1 - 0.08 * f.strength;
         windowScale(widthL, s0, s1, ds, n, sc, 20);
         windowScale(widthR, s0, s1, ds, n, sc, 20);
+        break;
+      }
+      case "off-camber": {
+        // banking flips AWAY from the turn direction
+        const midIdx = apexIndexInRange(f, s0, s1, input.kappa, ds, n);
+        const dir = Math.sign(input.kappa[midIdx]) || 1;
+        windowLerp(bank, s0, s1, ds, n, -dir * (0.025 + 0.045 * f.strength), 35);
+        break;
+      }
+      case "camber-plus": {
+        const midIdx = apexIndexInRange(f, s0, s1, input.kappa, ds, n);
+        const dir = Math.sign(input.kappa[midIdx]) || 1;
+        windowLerp(bank, s0, s1, ds, n, dir * (0.05 + 0.05 * f.strength), 30);
+        break;
+      }
+      case "banked-curve": {
+        const midIdx = apexIndexInRange(f, s0, s1, input.kappa, ds, n);
+        const dir = Math.sign(input.kappa[midIdx]) || 1;
+        windowLerp(bank, s0, s1, ds, n, dir * (0.12 + 0.08 * f.strength), 28);
+        break;
+      }
+      case "major-compression": {
+        const ref = Number.isFinite(input.groundZ[0]) ? input.groundZ : input.z;
+        const cIdx = extremumInRange(ref, s0, s1, ds, n, "min");
+        gaussianAdd(z, cIdx, ds, n, -4.5 * f.strength, 55 + 45 * f.strength);
+        break;
+      }
+      case "crest-corner": {
+        // bump exactly at the corner apex
+        const midIdx = apexIndexInRange(f, s0, s1, input.kappa, ds, n);
+        gaussianAdd(z, midIdx, ds, n, 2.6 * f.strength, 30 + 25 * f.strength);
+        break;
+      }
+      case "compression-corner": {
+        const midIdx = apexIndexInRange(f, s0, s1, input.kappa, ds, n);
+        gaussianAdd(z, midIdx, ds, n, -2.8 * f.strength, 32 + 26 * f.strength);
+        break;
+      }
+      case "drainage-dip": {
+        const ref = Number.isFinite(input.groundZ[0]) ? input.groundZ : input.z;
+        const cIdx = extremumInRange(ref, s0, s1, ds, n, "min");
+        gaussianAdd(z, cIdx, ds, n, -0.9 * f.strength, 16 + 10 * f.strength);
+        break;
+      }
+      case "passing-area": {
+        const widen = 1 + 0.22 * f.strength;
+        windowScale(widthL, s0, s1, ds, n, widen, 40);
+        windowScale(widthR, s0, s1, ds, n, widen, 40);
+        break;
+      }
+      case "downhill-braking":
+      case "uphill-braking": {
+        const midIdx = apexIndexInRange(f, s0, s1, input.kappa, ds, n);
+        const dir = Math.sign(input.kappa[midIdx]) || 1;
+        const widen = 1 + 0.18 * f.strength;
+        if (dir > 0) windowScale(widthR, s0, s1, ds, n, widen, 35);
+        else windowScale(widthL, s0, s1, ds, n, widen, 35);
         break;
       }
       default:
@@ -194,7 +283,7 @@ export function designCharacter(input: CharacterInput): CharacterResult {
   props.widthL = widthL;
   props.widthR = widthR;
 
-  return { identity, features, props, z: zFinal, bank: bankFinal };
+  return { identity, features, zones, props, z: zFinal, bank: bankFinal };
 }
 
 // ---------------------------------------------------------------------------
@@ -552,7 +641,230 @@ function applyFeatureProps(
         props.runoffWidthR[i] = lerpTo(props.runoffWidthR[i], props.runoffWidthR[i] * 1.6, w);
       });
       break;
+    case "downhill-braking":
+      each((i, w) => {
+        props.runoffL[i] = RunoffKind.Asphalt;
+        props.runoffR[i] = RunoffKind.Asphalt;
+        props.runoffWidthL[i] = lerpTo(props.runoffWidthL[i], props.runoffWidthL[i] * 1.5, w);
+        props.runoffWidthR[i] = lerpTo(props.runoffWidthR[i], props.runoffWidthR[i] * 1.5, w);
+        props.grip[i] = lerpTo(props.grip[i], props.grip[i] + 0.02, w);
+      });
+      break;
+    case "uphill-braking":
+      each((i, w) => {
+        props.runoffL[i] = RunoffKind.Gravel;
+        props.runoffR[i] = RunoffKind.Gravel;
+        props.runoffWidthL[i] = lerpTo(props.runoffWidthL[i], props.runoffWidthL[i] * 1.3, w);
+        props.runoffWidthR[i] = lerpTo(props.runoffWidthR[i], props.runoffWidthR[i] * 1.3, w);
+      });
+      break;
+    case "off-camber":
+      each((i, w) => {
+        props.grip[i] = lerpTo(props.grip[i], props.grip[i] - 0.06 * f.strength, w);
+        props.roughness[i] = lerpTo(props.roughness[i], Math.min(1, props.roughness[i] + 0.1), w);
+      });
+      break;
+    case "camber-plus":
+    case "banked-curve":
+      each((i, w) => {
+        props.grip[i] = lerpTo(props.grip[i], props.grip[i] + 0.04 * f.strength, w);
+        if (f.kind === "banked-curve") {
+          props.surface[i] = SurfaceKind.Concrete;
+        }
+      });
+      break;
+    case "concrete-corner":
+      each((i, w) => {
+        props.surface[i] = SurfaceKind.Concrete;
+        props.roughness[i] = lerpTo(props.roughness[i], Math.min(1, props.roughness[i] + 0.08), w);
+        props.grip[i] = lerpTo(props.grip[i], props.grip[i] - 0.01, w);
+      });
+      break;
+    case "rough-zone":
+      each((i, w) => {
+        props.surface[i] = SurfaceKind.AgedAsphalt;
+        props.roughness[i] = lerpTo(props.roughness[i], Math.min(1, 0.55 + 0.4 * f.strength), w);
+        props.grip[i] = lerpTo(props.grip[i], props.grip[i] - 0.05 * f.strength, w);
+      });
+      break;
+    case "patched": {
+      // patched/repaired pavement: transverse repair bands every 30-70 m
+      let s = s0;
+      let toggle = rng.bool();
+      while (true) {
+        const segLen = rng.range(30, 70);
+        const e = s + segLen;
+        const si = modFloor(s, ds, n);
+        const ei = modFloor(e, ds, n);
+        let i = si;
+        let guard = 0;
+        while (i !== ei && guard++ < n) {
+          if (i === i1) break;
+          if (toggle) {
+            props.surface[i] = SurfaceKind.PatchedMix;
+            props.roughness[i] = Math.min(1, props.roughness[i] + 0.12);
+          }
+          i = (i + 1) % n;
+        }
+        if (i === i1 || ei === i1) break;
+        toggle = !toggle;
+        s = e;
+        if (((((modFloor(s, ds, n) - i0) % n) + n) % n) > (((i1 - i0) % n) + n) % n) break;
+      }
+      break;
+    }
+    case "drainage-dip":
+      each((i, w) => {
+        // dip channel: gravel edges, slightly greasy when damp
+        props.runoffL[i] = RunoffKind.Gravel;
+        props.runoffR[i] = RunoffKind.Gravel;
+        props.grip[i] = lerpTo(props.grip[i], props.grip[i] - 0.015, w);
+      });
+      break;
+    case "narrow-shoulder":
+      each((i, w) => {
+        if (props.runoffL[i] !== RunoffKind.Wall) props.runoffL[i] = RunoffKind.Shoulder;
+        if (props.runoffR[i] !== RunoffKind.Wall) props.runoffR[i] = RunoffKind.Shoulder;
+        props.runoffWidthL[i] = lerpTo(props.runoffWidthL[i], 1.6, w);
+        props.runoffWidthR[i] = lerpTo(props.runoffWidthR[i], 1.6, w);
+        props.barrierDistL[i] = lerpTo(props.barrierDistL[i], 4.5, w);
+        props.barrierDistR[i] = lerpTo(props.barrierDistR[i], 4.5, w);
+      });
+      break;
+    case "passing-area":
+      each((i, w) => {
+        props.runoffL[i] = RunoffKind.Asphalt;
+        props.runoffR[i] = RunoffKind.Asphalt;
+        props.surface[i] = SurfaceKind.ModernAsphalt;
+        props.grip[i] = lerpTo(props.grip[i], 1.04, w);
+      });
+      break;
+    case "crown-transition":
+      each((i, w) => {
+        // crossfall drains to the OTHER side here (road crown swap)
+        props.crossfall[i] = lerpTo(props.crossfall[i], -props.crossfall[i] - 0.006 * f.strength, w);
+      });
+      break;
+    case "sausage-kerbs":
+      each((i, w) => {
+        if (props.kerbL[i] !== KerbKind.None || w > 0.5) props.kerbL[i] = KerbKind.Sausage;
+        if (props.kerbR[i] !== KerbKind.None || w > 0.5) props.kerbR[i] = KerbKind.Sausage;
+        props.surface[i] = SurfaceKind.ModernAsphalt;
+      });
+      break;
+    case "old-kerbs":
+      each((i, w) => {
+        if (props.kerbL[i] !== KerbKind.None || w > 0.5) props.kerbL[i] = KerbKind.OldLow;
+        if (props.kerbR[i] !== KerbKind.None || w > 0.5) props.kerbR[i] = KerbKind.OldLow;
+        props.surface[i] = SurfaceKind.AgedAsphalt;
+        props.roughness[i] = lerpTo(props.roughness[i], Math.min(1, props.roughness[i] + 0.15), w);
+      });
+      break;
+    case "retaining-run": {
+      // one-sided wall: pick a side deterministically
+      const leftSide = rng.bool();
+      each((i, w) => {
+        if (leftSide) {
+          props.runoffL[i] = RunoffKind.Wall;
+          props.barrierDistL[i] = lerpTo(props.barrierDistL[i], 1.8, w);
+          props.runoffWidthL[i] = lerpTo(props.runoffWidthL[i], 2, w);
+        } else {
+          props.runoffR[i] = RunoffKind.Wall;
+          props.barrierDistR[i] = lerpTo(props.barrierDistR[i], 1.8, w);
+          props.runoffWidthR[i] = lerpTo(props.runoffWidthR[i], 2, w);
+        }
+      });
+      break;
+    }
+    case "crest-corner":
+    case "compression-corner":
+      each((i, w) => {
+        props.roughness[i] = lerpTo(props.roughness[i], Math.min(1, props.roughness[i] + 0.08), w);
+      });
+      break;
+    case "service-road":
+    case "pit-lane":
+      // visual/geometry handled in mesh; mild prop annotation
+      each((i, w) => {
+        props.grip[i] = lerpTo(props.grip[i], props.grip[i] - 0.005, w);
+      });
+      break;
   }
+}
+
+// ---------------------------------------------------------------------------
+// zone biases (sector scale)
+// ---------------------------------------------------------------------------
+
+function applyZoneBiases(
+  props: PropertyProfiles,
+  zones: CircuitZone[],
+  input: CharacterInput,
+  ds: number,
+  n: number,
+): void {
+  for (const z of zones) {
+    const i0 = modFloor(z.sStart, ds, n);
+    const i1 = modFloor(z.sEnd, ds, n);
+    const total = ((i1 - i0 + n) % n) || 1;
+    let i = i0;
+    let guard = 0;
+    let k = 0;
+    while (i !== i1 && guard++ < n) {
+      // 150 m ramps at the boundaries: zones morph into each other
+      const edge = Math.min(k * ds, (total - k) * ds);
+      const w = Math.min(1, Math.max(0, edge / 150));
+      switch (z.kind) {
+        case "old":
+          props.roughness[i] = Math.min(1, props.roughness[i] + 0.22 * w);
+          props.widthL[i] *= 1 - 0.06 * w;
+          props.widthR[i] *= 1 - 0.06 * w;
+          props.surface[i] = SurfaceKind.AgedAsphalt;
+          if (props.runoffL[i] !== RunoffKind.Wall) props.runoffL[i] = RunoffKind.Grass;
+          if (props.runoffR[i] !== RunoffKind.Wall) props.runoffR[i] = RunoffKind.Grass;
+          props.barrierDistL[i] = lerpTo(props.barrierDistL[i], 8, w * 0.7);
+          props.barrierDistR[i] = lerpTo(props.barrierDistR[i], 8, w * 0.7);
+          props.grip[i] -= 0.03 * w;
+          break;
+        case "modern":
+          props.roughness[i] *= 1 - 0.5 * w;
+          props.surface[i] = SurfaceKind.ModernAsphalt;
+          props.grip[i] += 0.02 * w;
+          props.runoffWidthL[i] *= 1 + 0.3 * w;
+          props.runoffWidthR[i] *= 1 + 0.3 * w;
+          break;
+        case "mountain":
+          props.widthL[i] *= 1 - 0.05 * w;
+          props.widthR[i] *= 1 - 0.05 * w;
+          if (props.runoffL[i] !== RunoffKind.Wall) props.runoffL[i] = RunoffKind.Grass;
+          if (props.runoffR[i] !== RunoffKind.Wall) props.runoffR[i] = RunoffKind.Grass;
+          props.runoffWidthL[i] *= 1 - 0.3 * w;
+          props.runoffWidthR[i] *= 1 - 0.3 * w;
+          props.barrierDistL[i] = lerpTo(props.barrierDistL[i], 6, w * 0.7);
+          props.barrierDistR[i] = lerpTo(props.barrierDistR[i], 6, w * 0.7);
+          break;
+        case "developed":
+          props.runoffWidthL[i] *= 1 - 0.45 * w;
+          props.runoffWidthR[i] *= 1 - 0.45 * w;
+          props.barrierDistL[i] = lerpTo(props.barrierDistL[i], 5, w * 0.8);
+          props.barrierDistR[i] = lerpTo(props.barrierDistR[i], 5, w * 0.8);
+          break;
+        case "open":
+          props.runoffWidthL[i] *= 1 + 0.4 * w;
+          props.runoffWidthR[i] *= 1 + 0.4 * w;
+          break;
+        case "confined":
+          props.widthL[i] *= 1 - 0.05 * w;
+          props.widthR[i] *= 1 - 0.05 * w;
+          props.barrierDistL[i] = lerpTo(props.barrierDistL[i], 7, w * 0.7);
+          props.barrierDistR[i] = lerpTo(props.barrierDistR[i], 7, w * 0.7);
+          break;
+      }
+      i = (i + 1) % n;
+      k++;
+    }
+  }
+  void input;
 }
 
 // ---------------------------------------------------------------------------

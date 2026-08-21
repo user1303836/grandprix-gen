@@ -214,7 +214,7 @@ export class MapView {
     this.onBusy?.("LOADING TERRAIN (Mapterhorn DEM)", 0);
     try {
       const frame = makeLocalFrame(this.center);
-      const grid = await fetchMapterhornGrid(frame, this.radiusM, 30, (d, t) => {
+      const grid = await fetchMapterhornGrid(frame, this.radiusM, 12, (d, t) => {
         this.onBusy?.(`LOADING TERRAIN ${d}/${t} tiles`, d / t);
       });
       // coarse surroundings so the site sits in its landscape

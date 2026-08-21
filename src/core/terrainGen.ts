@@ -9,6 +9,7 @@
 import { generateValidTrack, type ValidResult } from "./generator";
 import { computeSpeedProfile, VEHICLE_PRESETS } from "./vehicle";
 import { gradeLimit } from "./vertical";
+import { Rng } from "./prng";
 import { maskHit } from "./osm";
 import type { TerrainGrid } from "./terrain";
 import type { SiteRef, TrackParams } from "./types";
@@ -65,13 +66,22 @@ export function terrainCost(
   const crossSlope = crossSlopeSum / Math.max(1, valid);
   const relief = zMax - zMin;
 
-  // earthwork estimate: grade-limit the ground profile, measure deviation
+  // earthwork estimate: grade-limit the ground profile, measure deviation.
+  // a superlinear term on large fills kills routes that would need giant
+  // causeways (they generate as bridges; a few is cool, kilometers is not)
   const gArr = Float64Array.from(ground);
   const dsEff = 2 * step;
   const limited = gradeLimit(gArr, dsEff, params.maxGrade, 400);
   let earthwork = 0;
-  for (let i = 0; i < gArr.length; i++) earthwork += Math.abs(limited[i] - gArr[i]);
+  let bigFill = 0;
+  const fillRef = Math.max(4, params.maxFill * (0.25 + 0.75 * params.earthworkTolerance));
+  for (let i = 0; i < gArr.length; i++) {
+    const d = limited[i] - gArr[i];
+    earthwork += Math.abs(d);
+    if (d > fillRef) bigFill += (d - fillRef) * (d - fillRef);
+  }
   earthwork /= gArr.length;
+  bigFill /= gArr.length;
 
   // elevation character: want relief to match elevationIntensity
   const L = n * 2;
@@ -86,13 +96,39 @@ export function terrainCost(
     }
   }
   const buildingFrac = buildingHits / Math.max(1, valid);
+  // hard mode: any meaningful overlap rejects the candidate outright
+  if (avoid && avoid.strength >= 1.4 && buildingFrac > 0.004) return 1e9;
+
+  // contour following: penalize travel aligned with the uphill gradient
+  // (roads should traverse slopes, not climb fall lines)
+  let alignSum = 0;
+  let alignN = 0;
+  {
+    const eps = grid.resolution * 1.5;
+    for (let i = 0; i < n; i += step) {
+      const gx =
+        (grid.elevationAt(xs[i] + eps, ys[i]) - grid.elevationAt(xs[i] - eps, ys[i])) / (2 * eps);
+      const gy =
+        (grid.elevationAt(xs[i], ys[i] + eps) - grid.elevationAt(xs[i], ys[i] - eps)) / (2 * eps);
+      if (!Number.isFinite(gx) || !Number.isFinite(gy)) continue;
+      const gMag = Math.hypot(gx, gy);
+      if (gMag < 0.015) continue;
+      const tx = Math.cos(heading[i]);
+      const ty = Math.sin(heading[i]);
+      const align = Math.abs((tx * gx + ty * gy) / gMag) * Math.min(gMag, 0.3);
+      alignSum += align;
+      alignN++;
+    }
+  }
+  const contourCost = alignN > 0 ? alignSum / alignN : 0;
 
   const adherence = params.terrainAdherence;
   const earthworkWeight = 1.6 - params.earthworkTolerance * 1.3; // low tolerance => strong penalty
   const cost =
-    adherence * (crossSlope * 2.0 + earthwork * earthworkWeight * 0.45) +
+    adherence * (crossSlope * 2.0 + earthwork * earthworkWeight * 0.45 + bigFill * 0.12) +
     reliefErr * 0.5 +
-    (avoid ? avoid.strength * buildingFrac * 6 : 0);
+    (avoid && avoid.strength < 1.4 ? avoid.strength * buildingFrac * 14 : 0) +
+    params.contourFollowing * contourCost * 9;
   return cost;
 }
 
@@ -117,9 +153,19 @@ export function generateTerrainTrack(
   };
 
   let best: (ValidResult & { terrainCost?: number }) | null = null;
+  const placeRng = Rng.fromSalt(seed, 9182);
   for (let k = 0; k < candidates; k++) {
     const sub = seed + k * 100003;
-    const r = generateValidTrack(sub, params, buildOpts, 6);
+    // relocate candidates within the site so avoidance/contour costs can
+    // actually choose between PLACES, not just shapes
+    const ang = placeRng.range(0, Math.PI * 2);
+    const rad = k === 0 ? 0 : placeRng.range(0, halfSpan * 0.42);
+    const r = generateValidTrack(sub, params, {
+      ...buildOpts,
+      // keep the relocated plan safely inside the DEM
+      maxFootprintRadius: Math.max(halfSpan * 0.3, (halfSpan - rad) * 0.8),
+      centerOffset: { x: Math.cos(ang) * rad, y: Math.sin(ang) * rad },
+    }, 6);
     opts.onProgress?.(k + 1, candidates);
     if (!r.track) continue;
     r.track.seed = seed;

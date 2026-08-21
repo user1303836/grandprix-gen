@@ -15,6 +15,7 @@ import {
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
 import { carveSampler, type TerrainGrid } from "../core/terrain";
+import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
 import type { Track } from "../core/types";
 
 const KERB_COLORS: Record<string, number> = {
@@ -107,11 +108,39 @@ export async function trackToGlb(track: Track, terrain?: TerrainGrid | null): Pr
     group.add(m);
   }
 
+  // structures + feature geometry
+  {
+    const groundSampler = terrain ? (x: number, y: number) => terrain.elevationAt(x, y) : null;
+    const palette: Record<string, number> = {
+      bridge: 0x9a968c, piers: 0x8f8b81, tunnel: 0x43444a, portals: 0x95897a,
+      retaining: 0x8f8b80, rock: 0x6b6357, embankment: 0x465c34,
+      "pit-lane": 0x484b52, "pit-wall": 0xc8c4bc, "service-road": 0x5c5c58,
+    };
+    for (const part of [...buildStructureMeshes(track, groundSampler), ...buildFeatureMeshes(track)]) {
+      const geo = new BufferGeometry();
+      const pos = new Float32Array(part.positions.length);
+      for (let i = 0; i < part.positions.length; i += 3) {
+        pos[i] = part.positions[i];
+        pos[i + 1] = part.positions[i + 2];
+        pos[i + 2] = -part.positions[i + 1];
+      }
+      geo.setAttribute("position", new BufferAttribute(pos, 3));
+      geo.setIndex(new BufferAttribute(part.indices, 1));
+      geo.computeVertexNormals();
+      const m = new Mesh(
+        geo,
+        new MeshStandardMaterial({ color: palette[part.name] ?? 0x8a857c, roughness: 0.95, side: DoubleSide }),
+      );
+      m.name = `structure_${part.name}`;
+      group.add(m);
+    }
+  }
+
   if (terrain) {
     const g = terrain;
     const maxSide = 256;
     const strideT = Math.max(1, Math.floor(Math.max(g.width, g.height) / maxSide));
-    const sampler = carveSampler(g, track.samples, 26, 110);
+    const sampler = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
     const gm = buildGridMesh(
       sampler,
       g.originX,

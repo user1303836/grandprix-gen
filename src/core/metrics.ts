@@ -5,6 +5,7 @@
 
 import type { Track, TrackParams } from "./types";
 import type { SpeedProfile } from "./vehicle";
+import { structureTotals } from "./structures";
 
 export interface CircuitMetrics {
   // headline
@@ -48,6 +49,8 @@ export interface CircuitMetrics {
   // character / heterogeneity
   /** number of distinctive named features around the lap */
   featureCount: number;
+  /** total structure meters by kind (terrain mode) */
+  structureM: { bridge: number; tunnel: number; retaining: number; "rock-cut": number; embankment: number };
   /** entropy of surface types around the lap, 0..100 */
   surfaceDiversity: number;
   /** width range (max - min total width), meters */
@@ -223,6 +226,7 @@ export function computeMetrics(track: Track, speed: SpeedProfile): CircuitMetric
   }
   const surfaceDiversity = clamp100(100 * normEntropy(surfBins) * 1.2);
   const featureCount = track.features?.length ?? 0;
+  const structureM = structureTotals(track.structures ?? []);
 
   return {
     lapTime: speed.lapTime,
@@ -259,6 +263,7 @@ export function computeMetrics(track: Track, speed: SpeedProfile): CircuitMetric
     maxFill,
 
     featureCount,
+    structureM,
     surfaceDiversity,
     widthRange: Number.isFinite(wMax - wMin) ? wMax - wMin : 0,
     meanRoughness: roughSum / Math.max(1, n),

@@ -38,6 +38,87 @@ export function gradeLimit(z: Float64Array, ds: number, maxGrade: number, passes
   return cur;
 }
 
+/**
+ * Hard terrain conformance. Constraint priority (this ordering is what
+ * guarantees the road never clips the land):
+ *   1. FLOOR is sacred: z >= ground - cut (burial = clipping, forbidden).
+ *   2. GRADE is sacred: |dz/ds| <= maxGrade.
+ *   3. CEILING is soft: z <= ground + fill is only a design preference --
+ *      when the land is steeper than the road may climb, the road leaves
+ *      the band upward and a bridge/embankment structure owns the gap.
+ *
+ * POCS loop toward the band for good aesthetics, then an exact raise-only
+ * floor+slope solve (floorSlopeSolve) which satisfies 1+2 simultaneously.
+ */
+export function conformToTerrain(
+  z: Float64Array,
+  ground: Float64Array,
+  ds: number,
+  maxGrade: number,
+  cut: number,
+  fill: number,
+  rounds = 48,
+): Float64Array {
+  const n = z.length;
+  if (!Number.isFinite(ground[0])) return z;
+  const lo = new Float64Array(n);
+  const hiSoft = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const g = ground[i];
+    lo[i] = Number.isFinite(g) ? g - cut : -1e9; // off-DEM: unconstrained
+    hiSoft[i] = Number.isFinite(g) ? g + fill * 3 : 1e9;
+  }
+  let cur: Float64Array = Float64Array.from(z);
+  for (let i = 0; i < n; i++) {
+    if (cur[i] < lo[i]) cur[i] = lo[i];
+    else if (cur[i] > hiSoft[i]) cur[i] = hiSoft[i];
+  }
+  for (let r = 0; r < rounds; r++) {
+    cur = gradeLimit(cur, ds, maxGrade, 240);
+    for (let i = 0; i < n; i++) {
+      if (cur[i] < lo[i]) cur[i] = lo[i];
+      else if (cur[i] > hiSoft[i]) cur[i] = hiSoft[i];
+    }
+  }
+  // exact finish: raise-only floor+slope solver; no ceiling clamp (structures)
+  cur = floorSlopeSolve(cur, lo, ds, Math.max(0.005, maxGrade));
+  return cur;
+}
+
+/**
+ * Minimal profile w >= max(z, lo) on a closed loop with |dw/ds| <= g.
+ * Solved on a doubled (two-lap) domain so floor contacts propagate their
+ * raises fully around the seam; the second lap is the circular envelope.
+ */
+export function floorSlopeSolve(z: Float64Array, lo: Float64Array, ds: number, g: number): Float64Array {
+  const n = z.length;
+  const step = g * ds;
+  // seam at the lowest floor point (deepest valley: least forcing)
+  let start = 0;
+  let loMin = Infinity;
+  for (let i = 0; i < n; i++) {
+    if (lo[i] < loMin) {
+      loMin = lo[i];
+      start = i;
+    }
+  }
+  const idx = (k: number) => (start + k) % n;
+  // tripled domain: the middle lap has BOTH neighbors inside the domain,
+  // so every output pair -- including the circular wrap -- is constrained
+  const w = new Float64Array(3 * n);
+  w[0] = Math.max(z[idx(0)], lo[idx(0)]);
+  for (let k = 1; k < 3 * n; k++) {
+    const i = idx(k);
+    w[k] = Math.max(z[i], lo[i], w[k - 1] - step);
+  }
+  for (let k = 3 * n - 2; k >= 0; k--) {
+    w[k] = Math.max(w[k], w[k + 1] - step);
+  }
+  const out = new Float64Array(n);
+  for (let k = 0; k < n; k++) out[idx(k)] = w[k + n];
+  return out;
+}
+
 /** Slope-limit an open (non-periodic) duplicated chain, extract the lap. */
 function limitOpenChain(z: Float64Array, ds: number, g: number, maxPasses: number): Float64Array {
   const n = z.length;
@@ -216,6 +297,9 @@ export function designTerrainProfile(
     for (let i = 0; i < n; i++) z[i] += 0.3 * (target[i] - z[i]);
     z = gradeLimit(z, ds, params.maxGrade);
   }
+
+  // FINAL guarantee: the band is a hard constraint (no clipping, ever).
+  z = conformToTerrain(z, existingZ, ds, params.maxGrade, cut, fill);
 
   const cutFill = new Float64Array(n);
   for (let i = 0; i < n; i++) cutFill[i] = z[i] - existingZ[i];

@@ -351,6 +351,14 @@ export interface Track {
   features: TrackFeature[];
   /** Per-sample physical property profiles. */
   props: PropertyProfiles;
+  /** Civil structures where the road deviates from the ground (terrain mode). */
+  structures: import("./structures").StructureSpan[];
+  /** 1 = terrain may be carved toward the road at this sample; 0 = structure owns the gap. */
+  carveMask: Uint8Array | null;
+  /** Per-sample flat carve half-width (narrow benches in cuts). */
+  carveInner: Float32Array | null;
+  /** Sector-scale character zones (old/modern/mountain/... kilometer axis). */
+  zones: import("./character").CircuitZone[];
 }
 
 // ---------------------------------------------------------------------------

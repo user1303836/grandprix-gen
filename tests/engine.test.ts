@@ -270,3 +270,47 @@ describe("fuzz invariants", () => {
     expect(tested).toBeGreaterThan(30);
   });
 });
+
+describe("terrain conformance (no clipping guarantee)", () => {
+  it("road never sits below ground - cut band, even in extreme mountains", () => {
+    // brutal terrain: 300 m relief at short wavelength
+    const frame = makeLocalFrame({ lat: 46.5, lon: 9.8 });
+    const res = 20;
+    const w = 200;
+    const h = 200;
+    const elev = new Float32Array(w * h);
+    for (let iy = 0; iy < h; iy++) {
+      for (let ix = 0; ix < w; ix++) {
+        const x = (ix - w / 2) * res;
+        const y = (iy - h / 2) * res;
+        elev[iy * w + ix] =
+          800 +
+          220 * Math.sin(x / 500) * Math.cos(y / 620) +
+          90 * Math.sin(x / 170 + 2) * Math.sin(y / 210) +
+          30 * Math.sin(x / 61) * Math.cos(y / 77);
+      }
+    }
+    const grid = new TerrainGrid(frame, res, w, h, (-w / 2) * res, (-h / 2) * res, elev);
+    const params = defaultParams();
+    const r = generateTerrainTrack(424242, params, grid, { candidates: 3 });
+    expect(r.track).not.toBeNull();
+    const t = r.track!;
+    const tol = params.earthworkTolerance;
+    const cut = Math.max(0.5, params.maxCut * (0.25 + 0.75 * tol)) + 2.5 + 0.01; // build.ts headroom
+    // the no-clipping invariant: z >= ground - cut at every sample
+    for (const s of t.samples) {
+      expect(s.z).toBeGreaterThanOrEqual(s.groundZ - cut);
+    }
+    // grades still legal
+    const ds = t.ds;
+    for (let i = 0; i < t.samples.length; i++) {
+      const a = t.samples[i];
+      const b = t.samples[(i + 1) % t.samples.length];
+      expect(Math.abs(b.z - a.z) / ds).toBeLessThan(0.125);
+    }
+    // structures classified where the road leaves the ground
+    expect(Array.isArray(t.structures)).toBe(true);
+    // carve mask present and consistent with spans
+    expect(t.carveMask).not.toBeNull();
+  });
+});

@@ -50,6 +50,8 @@ export function serializeProject(track: Track): string {
     track: {
       ...track,
       props: encodeProps(track.props) as unknown as PropertyProfiles,
+      carveMask: track.carveMask ? (Array.from(track.carveMask) as unknown as Uint8Array) : null,
+      carveInner: track.carveInner ? (Array.from(track.carveInner) as unknown as Float32Array) : null,
     },
   };
   return JSON.stringify(file, null, 1);
@@ -81,5 +83,13 @@ export function deserializeProject(json: string): Track {
   if (t.props && !ArrayBuffer.isView(t.props.widthL)) {
     t.props = decodeProps(t.props as unknown as Record<string, number[]>);
   }
+  if (t.carveMask && !ArrayBuffer.isView(t.carveMask)) {
+    t.carveMask = Uint8Array.from(t.carveMask as unknown as number[]);
+  }
+  if (t.carveInner && !ArrayBuffer.isView(t.carveInner)) {
+    t.carveInner = Float32Array.from(t.carveInner as unknown as number[]);
+  }
+  if (!Array.isArray(t.structures)) t.structures = [];
+  if (!Array.isArray(t.zones)) t.zones = [];
   return t;
 }

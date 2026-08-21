@@ -6,6 +6,14 @@
 import type { AppState, HeatLayer } from "./state";
 import type { Track, TrackSample } from "../core/types";
 import type { TerrainGrid } from "../core/terrain";
+import {
+  FeatureColors,
+  FeatureLabels,
+  ZoneTints,
+  SurfaceNames,
+  KerbNames,
+  RunoffNames,
+} from "../core/character";
 
 export class View2D {
   readonly canvas: HTMLCanvasElement;
@@ -311,10 +319,13 @@ export class View2D {
       this.drawBuildings(state.buildings);
     }
 
+    this.drawZoneTints(track);
+    this.drawFeatureUnderlays(track);
     this.drawTrack(state, track);
     if (state.lockRange) this.drawLockRange(track, state.lockRange);
     if (state.showCorners) this.drawCornerNumbers(track);
     this.drawFeatureLabels(track);
+    this.drawLegend(track);
     this.drawStartFinish(track);
     if (state.showControlPoints) this.drawDebug(track);
     if (this.hoverS !== null) this.drawHoverMarker(track, this.hoverS, dpr);
@@ -735,13 +746,68 @@ export class View2D {
     }
   }
 
+  /** Kilometer-scale zone halos under everything. */
+  private drawZoneTints(track: Track): void {
+    const zones = track.zones ?? [];
+    if (zones.length === 0) return;
+    const ctx = this.ctx;
+    const n = track.samples.length;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const z of zones) {
+      const i0 = Math.round(z.sStart / track.ds) % n;
+      const i1 = Math.round(z.sEnd / track.ds) % n;
+      ctx.strokeStyle = ZoneTints[z.kind];
+      ctx.lineWidth = Math.max(18, (track.samples[i0].width + 90) * this.scale);
+      ctx.beginPath();
+      let i = i0;
+      let guard = 0;
+      ctx.moveTo(this.wx(track.samples[i].x), this.wy(track.samples[i].y));
+      while (i !== i1 && guard++ < n) {
+        i = (i + 4) % n;
+        const p = track.samples[i];
+        ctx.lineTo(this.wx(p.x), this.wy(p.y));
+      }
+      ctx.stroke();
+    }
+  }
+
+  /** Colored underlay bands per feature span (beneath the asphalt band). */
+  private drawFeatureUnderlays(track: Track): void {
+    const feats = track.features ?? [];
+    if (feats.length === 0) return;
+    const ctx = this.ctx;
+    const n = track.samples.length;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const f of feats) {
+      const i0 = Math.round(f.sStart / track.ds) % n;
+      const i1 = Math.round(f.sEnd / track.ds) % n;
+      const col = FeatureColors[f.kind];
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = 0.34;
+      ctx.lineWidth = Math.max(6, (track.samples[i0].width + 15) * this.scale);
+      ctx.beginPath();
+      let i = i0;
+      let guard = 0;
+      ctx.moveTo(this.wx(track.samples[i].x), this.wy(track.samples[i].y));
+      while (i !== i1 && guard++ < n) {
+        i = (i + 2) % n;
+        const p = track.samples[i];
+        ctx.lineTo(this.wx(p.x), this.wy(p.y));
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
   private drawFeatureLabels(track: Track): void {
     const ctx = this.ctx;
     const s = track.samples;
     const n = s.length;
     if (track.features && track.features.length > 0) {
       const dpr = window.devicePixelRatio || 1;
-      ctx.font = `italic ${9.5 * dpr}px Georgia, serif`;
+      ctx.font = `italic 600 ${9.5 * dpr}px Georgia, serif`;
       ctx.textAlign = "left";
       ctx.textBaseline = "bottom";
       for (const f of track.features) {
@@ -753,17 +819,68 @@ export class View2D {
         const off = p.width / 2 + 34 / this.scale + 18;
         const x = this.wx(p.x + nx * off);
         const y = this.wy(p.y + ny * off);
-        // connector tick
-        ctx.strokeStyle = "rgba(255,180,84,0.55)";
+        const col = FeatureColors[f.kind];
+        // connector tick in the feature color
+        ctx.strokeStyle = col;
+        ctx.globalAlpha = 0.7;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(this.wx(p.x + nx * (p.width / 2 + 4)), this.wy(p.y + ny * (p.width / 2 + 4)));
         ctx.lineTo(x, y);
         ctx.stroke();
-        ctx.fillStyle = "#ffb454";
-        ctx.fillText(f.name, x + 3, y - 2);
+        ctx.globalAlpha = 1;
+        // chip: dark pill with accent bar
+        const tw = ctx.measureText(f.name).width;
+        const pad = 4 * dpr;
+        const chipH = 13 * dpr;
+        ctx.fillStyle = "rgba(10,13,17,0.82)";
+        ctx.beginPath();
+        ctx.roundRect(x, y - chipH, tw + pad * 2 + 5 * dpr, chipH, 3.5 * dpr);
+        ctx.fill();
+        ctx.fillStyle = col;
+        ctx.fillRect(x, y - chipH, 3 * dpr, chipH);
+        ctx.fillText(f.name, x + pad + 4 * dpr, y - 2 * dpr);
       }
     }
+  }
+
+  /** Compact legend of the feature kinds + zones present on this lap. */
+  private drawLegend(track: Track): void {
+    const feats = track.features ?? [];
+    const zones = track.zones ?? [];
+    if (feats.length === 0 && zones.length === 0) return;
+    const ctx = this.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const kinds = [...new Set(feats.map((f) => f.kind))];
+    const rows: { col: string; label: string }[] = kinds.map((k) => ({
+      col: FeatureColors[k],
+      label: FeatureLabels[k],
+    }));
+    for (const z of zones) rows.push({ col: "#8a97a8", label: z.name });
+    const maxRows = 12;
+    const shown = rows.slice(0, maxRows);
+    const padX = 9 * dpr;
+    const rowH = 13.5 * dpr;
+    ctx.font = `${9 * dpr}px ui-monospace, monospace`;
+    let wMax = 0;
+    for (const r of shown) wMax = Math.max(wMax, ctx.measureText(r.label).width);
+    const boxW = wMax + padX * 2 + 14 * dpr;
+    const boxH = shown.length * rowH + padX * 1.6;
+    const x0 = 10 * dpr;
+    const y0 = 10 * dpr;
+    ctx.fillStyle = "rgba(10,13,17,0.72)";
+    ctx.beginPath();
+    ctx.roundRect(x0, y0, boxW, boxH, 6 * dpr);
+    ctx.fill();
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    shown.forEach((r, i) => {
+      const cy = y0 + padX * 0.8 + i * rowH + rowH / 2;
+      ctx.fillStyle = r.col;
+      ctx.fillRect(x0 + padX * 0.7, cy - 3 * dpr, 6 * dpr, 6 * dpr);
+      ctx.fillStyle = "#c7cdd6";
+      ctx.fillText(r.label, x0 + padX * 0.7 + 11 * dpr, cy);
+    });
   }
 
   private drawHoverMarker(track: Track, sHover: number, dpr: number): void {
@@ -802,24 +919,29 @@ export class View2D {
     );
     // heterogeneous property readout
     if (track.props) {
-      const SURF = ["asphalt+", "asphalt-", "concrete", "mixed"];
-      const KERB = ["none", "flat", "std", "aggr"];
-      const RUN = ["grass", "gravel", "asph", "WALL"];
       const wL = track.props.widthL[idx];
       const wR = track.props.widthR[idx];
       lines.push(
         `Width L/R    ${wL.toFixed(1)}/${wR.toFixed(1)} m`,
-        `Surface      ${SURF[track.props.surface[idx]] ?? "?"}`,
+        `Surface      ${SurfaceNames[track.props.surface[idx]] ?? "?"}`,
         `Grip         ${track.props.grip[idx].toFixed(2)}  rough ${track.props.roughness[idx].toFixed(2)}`,
-        `Kerb L/R     ${KERB[track.props.kerbL[idx]]}/${KERB[track.props.kerbR[idx]]}`,
-        `Runoff L/R   ${RUN[track.props.runoffL[idx]]}/${RUN[track.props.runoffR[idx]]}`,
+        `Kerb L/R     ${KerbNames[track.props.kerbL[idx]]}/${KerbNames[track.props.kerbR[idx]]}`,
+        `Runoff L/R   ${RunoffNames[track.props.runoffL[idx]]}/${RunoffNames[track.props.runoffR[idx]]}`,
       );
       const bd = track.props.barrierDistL[idx];
       if (bd < 20) lines.push(`Barrier L    ${bd.toFixed(0)} m`);
       const fi = track.props.featureIdx[idx];
       if (fi >= 0 && track.features[fi]) {
-        lines.push(`-- ${track.features[fi].name} --`);
+        lines.push(`-- ${track.features[fi].name} --`, `   ${FeatureLabels[track.features[fi].kind]}`);
       }
+      const zone = (track.zones ?? []).find((z) =>
+        z.sStart <= z.sEnd ? p.s >= z.sStart && p.s < z.sEnd : p.s >= z.sStart || p.s < z.sEnd,
+      );
+      if (zone) lines.push(`Zone         ${zone.name}`);
+      const st = (track.structures ?? []).find((sp) =>
+        sp.sStart <= sp.sEnd ? p.s >= sp.sStart && p.s < sp.sEnd : p.s >= sp.sStart || p.s < sp.sEnd,
+      );
+      if (st) lines.push(`Structure    ${st.kind} (${st.minD >= 0 ? "+" : ""}${st.minD.toFixed(0)}..${st.maxD >= 0 ? "+" : ""}${st.maxD.toFixed(0)} m)`);
     }
     this.tooltip.textContent = lines.join("\n");
     this.tooltip.style.display = "block";

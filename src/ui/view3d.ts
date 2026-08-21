@@ -24,9 +24,13 @@ import {
   Object3D,
   PCFSoftShadowMap,
   PerspectiveCamera,
+  Raycaster,
   RepeatWrapping,
   Scene,
+  Sprite,
+  SpriteMaterial,
   SRGBColorSpace,
+  Vector2,
   Vector3,
   WebGLRenderer,
   ConeGeometry,
@@ -39,6 +43,14 @@ import {
   type TrackMeshData,
   type SimpleMesh,
 } from "../export/mesh";
+import { buildStructureMeshes, buildFeatureMeshes, type StructureMeshPart } from "../export/structuresMesh";
+import {
+  FeatureColors,
+  FeatureLabels,
+  SurfaceNames as SURFACE_NAMES,
+  KerbNames as KERB_NAMES,
+  RunoffNames as RUNOFF_NAMES,
+} from "../core/character";
 import { sampleAt } from "../core/types";
 import { carveSampler, makeTrackProximity, type TerrainGrid } from "../core/terrain";
 import type { OsmBuilding } from "../core/osm";
@@ -57,6 +69,9 @@ const KERB_COLORS: Record<string, number> = {
   flat: 0xd8d4d0,
   standard: 0xffffff, // striped texture
   aggressive: 0xc95a10,
+  sausage: 0xd8b020,
+  oldlow: 0xb5aa98,
+  high: 0xd04838,
 };
 
 const RUNOFF_COLORS: Record<string, number> = {
@@ -64,6 +79,7 @@ const RUNOFF_COLORS: Record<string, number> = {
   gravel: 0x9c8f73,
   asphalt: 0x55565a,
   wall: 0x86827a,
+  shoulder: 0x4a4a48,
 };
 
 export class View3D {
@@ -108,6 +124,18 @@ export class View3D {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI * 0.495;
+    // the browser context menu steals right-drag pan gestures -- kill it
+    this.renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
+    this.setupHover();
+    // floating "fit view" button (3D only)
+    const fitBtn = document.createElement("button");
+    fitBtn.className = "fit-view-btn";
+    fitBtn.style.display = "none";
+    fitBtn.title = "Fit view to track";
+    fitBtn.textContent = "\u229E fit";
+    fitBtn.addEventListener("click", () => this.resetView());
+    this.container.appendChild(fitBtn);
+    this.fitBtn = fitBtn;
 
     this.scene.add(new AmbientLight(0xb4b8bc, 0.55));
     this.sun = new DirectionalLight(0xfff2dd, 2.1);
@@ -165,11 +193,15 @@ export class View3D {
   /** Call when the 3D/drive view becomes visible. */
   setVisible(v: boolean): void {
     this.visible = v;
+    if (this.fitBtn) this.fitBtn.style.display = v ? "block" : "none";
+    if (!v && this.hoverEl) this.hoverEl.style.display = "none";
     if (v && this.needsRebuild && this.state) {
       this.rebuildScene(this.state);
       this.needsRebuild = false;
     }
   }
+
+  private fitBtn: HTMLButtonElement | null = null;
 
   private visible = false;
   private needsRebuild = false;
@@ -184,10 +216,16 @@ export class View3D {
           const m = o.material as MeshStandardMaterial;
           if (m.map && m.map !== this.stripedCurbTex) m.map.dispose();
           m.dispose();
+        } else if (o instanceof Sprite) {
+          const m = o.material as SpriteMaterial;
+          if (m.map) m.map.dispose();
+          m.dispose();
         }
       });
     }
     this.trackGroup = new Group();
+    this.hitMeshes = [];
+    this.labelSprites = [];
     const track = state.track;
     if (track) {
       const mesh = buildTrackMesh(track, { curbWidth: 1.3, runoffWidth: 9, stride: 1 });
@@ -196,6 +234,7 @@ export class View3D {
         const m = this.partMesh(mesh, part.start, part.count, part.name);
         m.castShadow = true;
         this.trackGroup.add(m);
+        if (!part.name.startsWith("runoff")) this.hitMeshes.push(m);
       }
       // barrier walls (armco / concrete where infrastructure stands close)
       const barriers = buildBarrierMeshes(track);
@@ -207,13 +246,21 @@ export class View3D {
         this.trackGroup.add(wall);
       }
       this.addStartFinish(track);
-      this.fitCamera(track, state.terrain);
+      this.addStructureMeshes(track, state.terrain);
+      this.addFeatureMeshes(track);
+      this.addFeatureLabels(track);
+      this.maybeFitCamera(track, state.terrain);
     }
 
     if (state.terrain && track) {
       // detailed carved site terrain
       const g = state.terrain;
-      const siteMesh = this.terrainMesh(g, carveSampler(g, track.samples, 26, 110), 240, 0);
+      const carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+      const holeProx = makeTrackProximity(
+        track.samples.filter((_, i) => !track.carveMask || track.carveMask[i] === 1),
+      );
+      const holeTest = (x: number, y: number) => holeProx.nearest(x, y, 12) !== null;
+      const siteMesh = this.terrainMesh(g, carve, 320, 0, holeTest);
       siteMesh.receiveShadow = true;
       this.trackGroup.add(siteMesh);
       // coarse surrounding context
@@ -240,7 +287,7 @@ export class View3D {
       if (state.buildings && state.buildings.length > 0) {
         // seat buildings on the CARVED terrain so they don't float/sink
         // where the corridor flattens the ground
-        const carved = carveSampler(state.terrain, track.samples, 26, 110);
+        const carved = carveSampler(state.terrain, track.samples, track.carveMask, 40, 120, track.carveInner);
         this.trackGroup.add(this.buildingsMesh(state.buildings, carved));
       }
     } else if (track) {
@@ -266,7 +313,7 @@ export class View3D {
       this.sun.position.set(c.x + span * 0.9, span * 1.1 + c.z + 800, -c.y + span * 0.55);
     }
     // fog scales with the site so overview shots don't wash out
-    this.scene.fog = new Fog(0x9aa8a2, span * 2.2, span * 9);
+    this.scene.fog = new Fog(0x9aa8a2, span * 3.4, span * 12);
 
     this.scene.add(this.trackGroup);
   }
@@ -278,6 +325,29 @@ export class View3D {
     const terrainMaxZ = terrain ? terrain.maxElevation : c.z;
     const camY = Math.max(c.z + span * 0.55, terrainMaxZ + span * 0.25);
     this.camera.position.set(c.x + span * 0.62, camY, -c.y + span * 0.62);
+  }
+
+  /**
+   * Fit ONLY on the very first build or when the site (terrain) changed --
+   * parameter morphs must never move the camera. The user owns the view;
+   * the floating "fit" button is the explicit escape hatch.
+   */
+  private didInitialFit = false;
+  private lastTerrain: TerrainGrid | null = null;
+  private maybeFitCamera(track: Track, terrain: TerrainGrid | null): void {
+    const terrainChanged = terrain !== this.lastTerrain;
+    if (!this.didInitialFit || terrainChanged) {
+      this.fitCamera(track, terrain);
+      this.didInitialFit = true;
+      this.lastTerrain = terrain;
+    }
+  }
+
+  /** Public: the floating "fit view" button. */
+  resetView(): void {
+    if (!this.state?.track) return;
+    this.fitCamera(this.state.track, this.state.terrain);
+    this.lastTerrain = this.state.terrain;
   }
 
   // ------------------------------------------------------------ meshes
@@ -374,6 +444,10 @@ export class View3D {
     sampler: (x: number, y: number) => number,
     maxSide: number,
     zOffset: number,
+    /** triangles fully within this distance of the corridor are culled
+     * (the road/structures own the corridor; bilinear terrain can leak
+     * over a narrow carved bench) */
+    holeProximity: ((x: number, y: number) => boolean) | null = null,
   ): Mesh {
     const strideT = Math.max(1, Math.floor(Math.max(grid.width, grid.height) / maxSide));
     const nx = Math.max(2, Math.floor((grid.width - 1) / strideT));
@@ -390,6 +464,20 @@ export class View3D {
       nx,
       ny,
     );
+    if (holeProximity) {
+      // cull triangles whose 3 vertices all sit inside the corridor
+      const kept: number[] = [];
+      const pos = gm.positions;
+      for (let i = 0; i < gm.indices.length; i += 3) {
+        let inside = 0;
+        for (let k = 0; k < 3; k++) {
+          const vi = gm.indices[i + k];
+          if (holeProximity(pos[vi * 3], pos[vi * 3 + 1])) inside++;
+        }
+        if (inside < 3) kept.push(gm.indices[i], gm.indices[i + 1], gm.indices[i + 2]);
+      }
+      gm.indices = new Uint32Array(kept);
+    }
     return this.coloredGridMesh(gm.positions, gm.indices, grid);
   }
 
@@ -431,21 +519,36 @@ export class View3D {
       pos[i + 2] = -y;
       const t = (z - zMin) / (zMax - zMin);
       const slope = grid.slopeAt(x, y);
-      const shade = Math.max(0.35, 1 - slope * 1.5);
-      // olive grass -> dry -> rocky grey/brown -> pale high
-      let r = 0.13 + t * 0.30;
-      let g = 0.36 + t * 0.24;
-      let b = 0.10 + t * 0.04;
-      if (t > 0.72) {
-        const u = (t - 0.72) / 0.28;
-        r = r * (1 - u) + 0.58 * u;
-        g = g * (1 - u) + 0.55 * u;
-        b = b * (1 - u) + 0.48 * u;
+      // hypsometric albedo: forest -> olive -> dry -> rock -> pale summits
+      let r: number, g: number, b: number;
+      if (t < 0.45) {
+        const u = t / 0.45;
+        r = 0.10 + u * 0.16;
+        g = 0.24 + u * 0.14;
+        b = 0.07 + u * 0.05;
+      } else if (t < 0.75) {
+        const u = (t - 0.45) / 0.3;
+        r = 0.26 + u * 0.18;
+        g = 0.38 - u * 0.02;
+        b = 0.12 + u * 0.08;
+      } else {
+        const u = (t - 0.75) / 0.25;
+        r = 0.44 + u * 0.32;
+        g = 0.36 + u * 0.34;
+        b = 0.2 + u * 0.42;
       }
+      // steep ground reads as rock regardless of elevation
+      const rocky = Math.max(0, Math.min(1, (slope - 0.35) * 2.2));
+      r = r * (1 - rocky) + 0.40 * rocky;
+      g = g * (1 - rocky) + 0.375 * rocky;
+      b = b * (1 - rocky) + 0.34 * rocky;
+      // subtle per-vertex variation so big faces don't look airbrushed
+      const nv = Math.sin(x * 0.043 + y * 0.031) * 0.5 + Math.sin(x * 0.011 - y * 0.017) * 0.5;
+      const vmod = 1 + nv * 0.07;
       const vi = (i / 3) * 3;
-      colors[vi] = r * shade;
-      colors[vi + 1] = g * shade;
-      colors[vi + 2] = b * shade;
+      colors[vi] = r * vmod;
+      colors[vi + 1] = g * vmod;
+      colors[vi + 2] = b * vmod;
     }
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(pos, 3));
@@ -569,6 +672,202 @@ export class View3D {
     return m;
   }
 
+  // ---------------------------------------------------- structures
+  private addStructureMeshes(track: Track, terrain: TerrainGrid | null): void {
+    if (!this.trackGroup) return;
+    const groundSampler = terrain ? (x: number, y: number) => terrain.elevationAt(x, y) : null;
+    for (const part of buildStructureMeshes(track, groundSampler)) {
+      this.trackGroup.add(this.structureMesh(part));
+    }
+  }
+
+  private addFeatureMeshes(track: Track): void {
+    if (!this.trackGroup) return;
+    for (const part of buildFeatureMeshes(track)) {
+      this.trackGroup.add(this.structureMesh(part));
+    }
+  }
+
+  private structureMesh(part: StructureMeshPart): Mesh {
+    const geo = new BufferGeometry();
+    // [x, y_plan, z_up] -> three [x, z_up, -y_plan]
+    const pos = new Float32Array(part.positions.length);
+    for (let i = 0; i < part.positions.length; i += 3) {
+      pos[i] = part.positions[i];
+      pos[i + 1] = part.positions[i + 2];
+      pos[i + 2] = -part.positions[i + 1];
+    }
+    geo.setAttribute("position", new BufferAttribute(pos, 3));
+    geo.setIndex(new BufferAttribute(part.indices, 1));
+    geo.computeVertexNormals();
+    const colors: Record<string, number> = {
+      bridge: 0x9a968c,
+      piers: 0x8f8b81,
+      tunnel: 0x43444a,
+      portals: 0x95897a,
+      retaining: 0x8f8b80,
+      rock: 0x6b6357,
+      embankment: 0x465c34,
+      "pit-lane": 0x484b52,
+      "pit-wall": 0xc8c4bc,
+      "service-road": 0x5c5c58,
+    };
+    const mat = new MeshStandardMaterial({
+      color: colors[part.name] ?? 0x8a857c,
+      roughness: part.name === "tunnel" ? 0.8 : 0.95,
+      metalness: 0,
+      side: DoubleSide,
+    });
+    const mesh = new Mesh(geo, mat);
+    mesh.castShadow = part.name !== "embankment" && part.name !== "pit-lane";
+    mesh.receiveShadow = true;
+    mesh.name = `structure_${part.name}`;
+    return mesh;
+  }
+
+  // ---------------------------------------------------- hover tooltip
+  private hoverRay = new Raycaster();
+  private hitMeshes: Mesh[] = [];
+  private hoverEl: HTMLDivElement | null = null;
+  private hoverPos: { x: number; y: number } | null = null;
+  private lastHoverT = 0;
+
+  private setupHover(): void {
+    const el = document.createElement("div");
+    el.className = "hover-tip3d";
+    el.style.display = "none";
+    this.container.appendChild(el);
+    this.hoverEl = el;
+    const onMove = (e: PointerEvent) => {
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      this.hoverPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    };
+    // listen on both: overlays may sit between the pointer and the canvas
+    this.renderer.domElement.addEventListener("pointermove", onMove);
+    this.container.addEventListener("pointermove", onMove);
+    this.container.addEventListener("pointerleave", () => {
+      this.hoverPos = null;
+      if (this.hoverEl) this.hoverEl.style.display = "none";
+    });
+  }
+
+  private updateHover(now: number): void {
+    const el = this.hoverEl;
+    if (!el) return;
+    if (!this.hoverPos || this.driveActive || !this.state?.track || now - this.lastHoverT < 70) {
+      if (!this.hoverPos || this.driveActive) el.style.display = "none";
+      return;
+    }
+    this.lastHoverT = now;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new Vector2(
+      (this.hoverPos.x / rect.width) * 2 - 1,
+      -(this.hoverPos.y / rect.height) * 2 + 1,
+    );
+    this.hoverRay.setFromCamera(ndc, this.camera);
+    const hits = this.hoverRay.intersectObjects(this.hitMeshes, false);
+    const track = this.state.track;
+    if (hits.length === 0 || !track) {
+      el.style.display = "none";
+      return;
+    }
+    const uv = hits[0].uv;
+    if (!uv) {
+      el.style.display = "none";
+      return;
+    }
+    const s = ((uv.x * 6) % track.length + track.length) % track.length;
+    const idx = Math.round(s / track.ds) % track.samples.length;
+    const smp = track.samples[idx];
+    const props = track.props;
+    const fi = props.featureIdx[idx];
+    const feat = fi >= 0 ? track.features[fi] : null;
+    const { SurfaceNames, KerbNames, RunoffNames } = { SurfaceNames: SURFACE_NAMES, KerbNames: KERB_NAMES, RunoffNames: RUNOFF_NAMES };
+    const rows: string[] = [];
+    rows.push(`<div class="tt-head">${(s / 1000).toFixed(2)} km${feat ? ` · <span style="color:${FeatureColors[feat.kind]}">${feat.name}</span>` : ""}</div>`);
+    if (feat) rows.push(`<div class="tt-row dim">${FeatureLabels[feat.kind]}</div>`);
+    rows.push(`<div class="tt-row">${SurfaceNames[props.surface[idx]]} · grip ${props.grip[idx].toFixed(2)}</div>`);
+    rows.push(`<div class="tt-row">width ${(props.widthL[idx] + props.widthR[idx]).toFixed(1)} m · bank ${(smp.bank * 57.3).toFixed(1)}° · z ${smp.z.toFixed(1)} m</div>`);
+    rows.push(`<div class="tt-row dim">kerb ${KerbNames[props.kerbL[idx]]}/${KerbNames[props.kerbR[idx]]} · ${RunoffNames[props.runoffL[idx]]}/${RunoffNames[props.runoffR[idx]]}</div>`);
+    if (Number.isFinite(smp.speed)) rows.push(`<div class="tt-row dim">v ≈ ${(smp.speed * 3.6).toFixed(0)} km/h</div>`);
+    el.innerHTML = rows.join("");
+    el.style.display = "block";
+    const pad = 14;
+    const elW = el.offsetWidth;
+    const elH = el.offsetHeight;
+    let lx = this.hoverPos.x + pad;
+    let ly = this.hoverPos.y + pad;
+    if (lx + elW > rect.width - 8) lx = this.hoverPos.x - elW - pad;
+    if (ly + elH > rect.height - 8) ly = this.hoverPos.y - elH - pad;
+    el.style.left = `${lx}px`;
+    el.style.top = `${ly}px`;
+  }
+
+  // ---------------------------------------------------- feature labels
+  private labelSprites: { sprite: Sprite; s: number }[] = [];
+
+  private addFeatureLabels(track: Track): void {
+    this.labelSprites = [];
+    const feats = track.features ?? [];
+    const zones = track.zones ?? [];
+    const makeLabel = (text: string, sub: string, accent: string, sAt: number, height: number) => {
+      const cv = document.createElement("canvas");
+      const ctx = cv.getContext("2d")!;
+      ctx.font = "600 34px 'Segoe UI', system-ui, sans-serif";
+      const wText = ctx.measureText(text).width;
+      ctx.font = "500 22px 'Segoe UI', system-ui, sans-serif";
+      const wSub = ctx.measureText(sub).width;
+      cv.width = Math.ceil(Math.max(wText, wSub)) + 48;
+      cv.height = 96;
+      const c2 = cv.getContext("2d")!;
+      c2.fillStyle = "rgba(12,15,19,0.82)";
+      c2.beginPath();
+      c2.roundRect(0, 10, cv.width, 76, 10);
+      c2.fill();
+      c2.fillStyle = accent;
+      c2.fillRect(0, 24, 7, 48);
+      c2.font = "600 34px 'Segoe UI', system-ui, sans-serif";
+      c2.fillStyle = "#f2f3f5";
+      c2.fillText(text, 22, 46);
+      c2.font = "500 22px 'Segoe UI', system-ui, sans-serif";
+      c2.fillStyle = "#9aa3ad";
+      c2.fillText(sub, 22, 76);
+      const tex = new CanvasTexture(cv);
+      tex.colorSpace = SRGBColorSpace;
+      const mat = new SpriteMaterial({ map: tex, depthTest: false, transparent: true });
+      const sp = new Sprite(mat);
+      const smp = sampleAt(track, sAt);
+      sp.position.set(smp.x, smp.z + height, -smp.y);
+      const aspect = cv.width / cv.height;
+      sp.scale.set(30 * aspect, 30, 1);
+      sp.renderOrder = 50;
+      this.labelSprites.push({ sprite: sp, s: sAt });
+      this.trackGroup?.add(sp);
+    };
+    feats.forEach((f, fi) => {
+      const sMid = (f.sStart + f.sEnd) / 2;
+      // stagger heights so clustered labels don't stack
+      makeLabel(f.name, FeatureLabels[f.kind], FeatureColors[f.kind], sMid, 22 + (fi % 3) * 11);
+    });
+    zones.forEach((z, zi) => {
+      const sMid = (z.sStart + z.sEnd) / 2;
+      makeLabel(z.name, "section", "#8a97a8", sMid, 48 + (zi % 2) * 14);
+    });
+  }
+
+  /** Per-frame label upkeep: distance fade + roughly constant screen size. */
+  private updateLabels(): void {
+    const span = this.state?.track ? estimateSpan(this.state.track) : 2000;
+    for (const { sprite } of this.labelSprites) {
+      const d = this.camera.position.distanceTo(sprite.position);
+      const mat = sprite.material as SpriteMaterial;
+      mat.opacity = Math.max(0, Math.min(1, 1.25 - d / (span * 1.1)));
+      const w = Math.max(16, Math.min(120, d * 0.05));
+      const aspect = sprite.scale.x / Math.max(1e-6, sprite.scale.y);
+      sprite.scale.set(w * aspect, w, 1);
+    }
+  }
+
   // ------------------------------------------------------------- tick
   private tick(dt: number): void {
     const state = this.state;
@@ -597,6 +896,8 @@ export class View3D {
     } else {
       this.controls.enabled = true;
       this.controls.update();
+      this.updateLabels();
+      this.updateHover(performance.now());
     }
     this.renderer.render(this.scene, this.camera);
   }

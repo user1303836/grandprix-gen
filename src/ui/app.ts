@@ -496,10 +496,12 @@ export class App {
     const site = { lat: sel.lat, lon: sel.lon, radiusMeters: sel.radiusMeters };
     this.store.set({ terrain: grid, terrainContext: context, buildings: null, site }, "terrain", "terrainContext", "buildings", "site");
     this.setView("2d");
-    void this.generate();
-    // OSM building context (best-effort, never blocks)
+    // OSM building context. When avoidance is on the FIRST search must
+    // already see the mask -- await the fetch before generating.
+    const wantAvoid = this.store.state.avoidBuildings !== "off";
     void (async () => {
       try {
+        if (wantAvoid) this.setBusy("LOADING OSM BUILDINGS", 0.75);
         const { fetchOsmBuildings } = await import("../core/osm");
         const buildings = await fetchOsmBuildings(grid.frame, sel.radiusMeters * 1.05);
         if (buildings.length > 0 && this.store.state.terrain === grid) {
@@ -509,8 +511,12 @@ export class App {
         }
       } catch {
         // no buildings is fine
+      } finally {
+        if (wantAvoid) this.setBusy(null, null);
       }
+      if (wantAvoid) void this.generate();
     })();
+    if (!wantAvoid) void this.generate();
   }
 
   /** Scout a region: load a wide DEM, search it for promising sub-sites. */
@@ -548,29 +554,46 @@ export class App {
 
   private async useScoutedSite(site: import("./mapView").ScoutSiteResult): Promise<void> {
     if (!this.scoutGrid || !this.scoutCenter) return;
-    // sub-grid the region DEM around the picked site
-    const { TerrainGrid } = await import("../core/terrain");
-    const { makeLocalFrame, geoToLocal } = await import("../core/geo");
-    const g = this.scoutGrid;
+    // fetch a FINE grid for the picked site (the scout region is 45 m --
+    // far too coarse to seat a 12 m road)
+    const { fetchMapterhornGrid } = await import("../core/terrain");
+    const { makeLocalFrame } = await import("../core/geo");
     const frame = makeLocalFrame({ lat: site.lat, lon: site.lon });
-    const radius = site.radiusMeters * 1.15;
-    const res = g.resolution;
-    const n = Math.ceil((radius * 2) / res);
-    const elev = new Float32Array(n * n);
-    const origin = geoToLocal(g.frame, { lat: site.lat, lon: site.lon });
-    for (let iy = 0; iy < n; iy++) {
-      for (let ix = 0; ix < n; ix++) {
-        const x = origin.x - radius + ix * res;
-        const y = origin.y - radius + iy * res;
-        const z = g.elevationAt(x, y);
-        elev[iy * n + ix] = Number.isFinite(z) ? z : 0;
-      }
+    try {
+      this.setBusy("LOADING SITE DEM", 0.3);
+      const fine = await fetchMapterhornGrid(frame, site.radiusMeters, 12, (d, t) =>
+        this.setBusy(`LOADING SITE DEM ${d}/${t}`, d / t),
+      );
+      const siteRef = { lat: site.lat, lon: site.lon, radiusMeters: site.radiusMeters };
+      this.store.set(
+        { terrain: fine, terrainContext: this.scoutGrid, buildings: null, site: siteRef },
+        "terrain",
+        "terrainContext",
+        "buildings",
+        "site",
+      );
+      this.setView("2d");
+      const wantAvoid = this.store.state.avoidBuildings !== "off";
+      void (async () => {
+        try {
+          const { fetchOsmBuildings } = await import("../core/osm");
+          const buildings = await fetchOsmBuildings(fine.frame, site.radiusMeters * 1.05);
+          if (buildings.length > 0 && this.store.state.terrain === fine) {
+            this.store.set({ buildings }, "buildings");
+            this.dirty2d = true;
+            this.view3d.setState(this.store.state);
+          }
+        } catch {
+          // fine
+        }
+        if (wantAvoid) void this.generate();
+      })();
+      if (!wantAvoid) void this.generate();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      this.setBusy(null, null);
     }
-    const sub = new TerrainGrid(frame, res, n, n, -radius, -radius, elev);
-    const siteRef = { lat: site.lat, lon: site.lon, radiusMeters: site.radiusMeters };
-    this.store.set({ terrain: sub, site: siteRef }, "terrain", "site");
-    this.setView("2d");
-    void this.generate();
   }
 
   // ------------------------------------------------------------ history

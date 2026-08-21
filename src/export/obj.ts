@@ -5,6 +5,7 @@
 
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
 import { carveSampler, type TerrainGrid } from "../core/terrain";
+import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
 import type { Track } from "../core/types";
 
 export interface ObjOptions {
@@ -59,12 +60,22 @@ export function trackToObj(track: Track, opts: ObjOptions = {}): string {
     emitPart(`barrier_${side}`, bm.positions, bm.indices, 0, bm.indices.length);
   }
 
+  // structures + feature geometry (bridges, tunnels, walls, pit lane...)
+  {
+    const groundSampler = opts.terrain
+      ? (x: number, y: number) => opts.terrain!.elevationAt(x, y)
+      : null;
+    for (const part of [...buildStructureMeshes(track, groundSampler), ...buildFeatureMeshes(track)]) {
+      emitPart(`structure_${part.name}`, part.positions, part.indices, 0, part.indices.length);
+    }
+  }
+
   if (opts.terrain) {
     const g = opts.terrain;
     const extent = opts.terrainExtent ?? Math.max(g.width, g.height) * g.resolution;
     const nx = Math.min(256, g.width);
     const ny = Math.min(256, g.height);
-    const sampler = carveSampler(g, track.samples, 26, 110);
+    const sampler = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
     const mesh2 = buildGridMesh(
       sampler,
       g.originX,

@@ -41,17 +41,45 @@ export interface TrackMeshData {
 const LINE_WIDTH = 0.32;
 const LINE_INSET = 0.18;
 
+/** structure kind per sample, derived from track.structures (cached). */
+const structCache = new WeakMap<Track, Int8Array>();
+function structureAt(track: Track): Int8Array {
+  let out = structCache.get(track);
+  if (out) return out;
+  const n = track.samples.length;
+  out = new Int8Array(n);
+  for (const sp of track.structures ?? []) {
+    const code = sp.kind === "bridge" ? 1 : sp.kind === "tunnel" ? 2 : sp.kind === "rock-cut" ? 3 : sp.kind === "retaining" ? 4 : 5;
+    const i0 = Math.round(sp.sStart / track.ds) % n;
+    const i1 = Math.round(sp.sEnd / track.ds) % n;
+    let i = i0;
+    let guard = 0;
+    while (i !== i1 && guard++ < n) {
+      out[i] = code;
+      i = (i + 1) % n;
+    }
+  }
+  structCache.set(track, out);
+  return out;
+}
+
 const KERB_WIDTH: Record<number, number> = {
   [KerbKind.None]: 0,
   [KerbKind.FlatPainted]: 0.7,
   [KerbKind.Standard]: 1.3,
   [KerbKind.Aggressive]: 1.7,
+  [KerbKind.Sausage]: 1.0,
+  [KerbKind.OldLow]: 0.9,
+  [KerbKind.High]: 1.2,
 };
 const KERB_LIFT: Record<number, number> = {
   [KerbKind.None]: 0,
   [KerbKind.FlatPainted]: 0.006,
   [KerbKind.Standard]: 0.05,
   [KerbKind.Aggressive]: 0.13,
+  [KerbKind.Sausage]: 0.16,
+  [KerbKind.OldLow]: 0.02,
+  [KerbKind.High]: 0.11,
 };
 
 /** Base tint per surface kind (multiplied into material color). */
@@ -101,6 +129,29 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
     return 1 + low * (0.05 + rough * 0.14);
   };
 
+  // ---- micro scale: transverse pavement seams + slab joints + micro bumps ---
+  // asphalt gets a tar seam every ~28 m, concrete slab joints every 6 m,
+  // patched mix gets irregular seams. One station wide, subtle darkening.
+  const seamAt = (i: number, surf: number): number => {
+    const sM = i * track.ds;
+    if (surf === SurfaceKind.Concrete) {
+      return sM % 6 < track.ds ? 0.86 : 1;
+    }
+    if (surf === SurfaceKind.PatchedMix) {
+      const period = 34 + ((track.seed >> 3) % 19);
+      return sM % period < track.ds ? 0.8 : 1;
+    }
+    // asphalt: modern gets crisp joints, aged gets cracked irregular seams
+    const period = surf === SurfaceKind.AgedAsphalt ? 22 + ((track.seed >> 5) % 13) : 28;
+    return sM % period < track.ds ? (surf === SurfaceKind.AgedAsphalt ? 0.84 : 0.9) : 1;
+  };
+  // per-station micro bump (visual only; +-2.2 cm scaled by roughness)
+  const bumpAt = (i: number, rough: number): number => {
+    const v = Math.sin(i * 78.233 + track.seed * 0.371) * 43758.5453;
+    const f = v - Math.floor(v) - 0.5;
+    return f * 0.045 * (0.3 + rough);
+  };
+
   for (let r = 0; r < m; r++) {
     const si = idxList[r];
     const s = track.samples[si];
@@ -114,9 +165,16 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
     const wR = halfR(si);
     const roL = runoffWL(si);
     const roR = runoffWR(si);
-    // wall runoff: the strip narrows to a concrete pad
-    const roEffL = runoffAt(si, "L") === RunoffKind.Wall ? Math.min(roL, 2.5) : roL;
-    const roEffR = runoffAt(si, "R") === RunoffKind.Wall ? Math.min(roR, 2.5) : roR;
+    // wall runoff: the strip narrows to a concrete pad.
+    // bridge decks / tunnels: no overhanging grass -- a narrow concrete pad
+    const struct = structureAt(track)[si];
+    const onDeck = struct === 1 || struct === 2;
+    let roEffL = runoffAt(si, "L") === RunoffKind.Wall ? Math.min(roL, 2.5) : roL;
+    let roEffR = runoffAt(si, "R") === RunoffKind.Wall ? Math.min(roR, 2.5) : roR;
+    if (onDeck) {
+      roEffL = Math.min(roEffL, 1.1);
+      roEffR = Math.min(roEffR, 1.1);
+    }
     // absent kerb: kerb column collapses onto the edge line (zero-width)
     const kerbOuterL = kL === KerbKind.None ? wL - LINE_INSET : wL + kerbWL;
     const kerbOuterR = kR === KerbKind.None ? -(wR - LINE_INSET) : -(wR + kerbWR);
@@ -131,7 +189,8 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       -(wR + kerbWR + roEffR),
     ];
     const tint = SURFACE_TINT[surfaceAt(si)] ?? [1, 1, 1];
-    const mot = mottle(si, roughAt(si));
+    const mot = mottle(si, roughAt(si)) * seamAt(si, surfaceAt(si));
+    const bump = bumpAt(si, roughAt(si));
     for (let c = 0; c < cols; c++) {
       const off = offs[c];
       const lx = -Math.sin(s.heading) * off * cosB;
@@ -142,6 +201,8 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
       if (c === 6) extraZ = KERB_LIFT[kR] ?? 0;
       if (c === 2 || c === 5) extraZ = 0.015;
       if (c === 0 || c === 7) extraZ = -0.05;
+      // micro bumps only on the drivable bands (asphalt + kerbs), not runoff
+      if (c >= 1 && c <= 6) extraZ += bump;
       const vi = (r * cols + c) * 3;
       positions[vi] = s.x + lx;
       positions[vi + 1] = s.y + ly;
@@ -172,8 +233,10 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
     switch (bandNames[band]) {
       case "kerb":
         return kerbAt(si, bandSides[band] === "left" ? "L" : "R");
-      case "runoff":
+      case "runoff": {
+        if (structureAt(track)[si] === 1 || structureAt(track)[si] === 2) return RunoffKind.Wall; // concrete pad on decks
         return runoffAt(si, bandSides[band] === "left" ? "L" : "R");
+      }
       case "asphalt":
         return surfaceAt(si);
       default:
@@ -181,8 +244,8 @@ export function buildTrackMesh(track: Track, opts: TrackMeshOptions): TrackMeshD
     }
   };
   const kindNames: Record<string, Record<number, string>> = {
-    kerb: { 0: "none", 1: "flat", 2: "standard", 3: "aggressive" },
-    runoff: { 0: "grass", 1: "gravel", 2: "asphalt", 3: "wall" },
+    kerb: { 0: "none", 1: "flat", 2: "standard", 3: "aggressive", 4: "sausage", 5: "oldlow", 6: "high" },
+    runoff: { 0: "grass", 1: "gravel", 2: "asphalt", 3: "wall", 4: "shoulder" },
     asphalt: { 0: "modern", 1: "aged", 2: "concrete", 3: "patched" },
   };
 
@@ -259,8 +322,10 @@ function buildBarrierSide(track: Track, side: "left" | "right"): SimpleMesh | nu
   let runActive = false;
   const H = 1.0;
 
+  const struct = structureAt(track);
   const offsetAt = (i: number): number => {
     const sign = side === "left" ? 1 : -1;
+    if (struct[i] === 1) return sign * (halfW[i] + 1.35); // bridge parapet at the deck edge
     if (isWall[i] === RunoffKind.Wall) return sign * (halfW[i] + 2.6);
     return sign * (halfW[i] + 1.4 + runoffW[i] + dist[i]);
   };
@@ -268,7 +333,7 @@ function buildBarrierSide(track: Track, side: "left" | "right"): SimpleMesh | nu
   for (let i = 0; i <= n; i++) {
     const si = i % n;
     const wall = isWall[si] === RunoffKind.Wall;
-    const active = wall || dist[si] < 16;
+    const active = wall || dist[si] < 16 || struct[si] === 1;
     if (!active) {
       runActive = false;
       continue;

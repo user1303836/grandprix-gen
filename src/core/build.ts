@@ -18,8 +18,9 @@ import {
 } from "./geometry";
 import { kappaFromElements, totalTurning, morphElements, preCloseElements } from "./elements";
 import { detectCorners, findStartFinish, makeSectors } from "./corners";
-import { designVerticalProfile, designTerrainProfile } from "./vertical";
+import { designVerticalProfile, designTerrainProfile, conformToTerrain } from "./vertical";
 import { designCharacter } from "./profiles";
+import { classifyStructures } from "./structures";
 import { Rng } from "./prng";
 import {
   GENERATOR_VERSION,
@@ -37,6 +38,8 @@ import {
 export interface BuildOptions {
   site?: SiteRef | null;
   terrain?: TerrainMeta | null;
+  /** Plan translation (local meters) applied before terrain sampling. */
+  centerOffset?: { x: number; y: number } | null;
   /** Ground elevation sampler in local metric coords (site mode). */
   terrainSampler?: ((x: number, y: number) => number) | null;
   /** Site mode: clamp the horizontal footprint to this radius (meters). */
@@ -122,6 +125,14 @@ export function buildTrack(
   rotateInPlace(heading, rot);
   rotateInPlace(kappa, rot);
 
+  // 8b. site placement: translate the whole plan (terrain sampling follows)
+  if (opts.centerOffset) {
+    for (let i = 0; i < n; i++) {
+      uni.x[i] += opts.centerOffset.x;
+      uni.y[i] += opts.centerOffset.y;
+    }
+  }
+
   const corners = detectCorners(kappa, ds, 0);
   const sectors = makeSectors(uni.length, 0);
 
@@ -155,6 +166,71 @@ export function buildTrack(
   const bank = character.bank;
   const props = character.props;
 
+  // 11. terrain conformance is a HARD constraint, re-checked after feature
+  // geometry (crests/bowls/dips move z): the road never clips the land.
+  let structures: Track["structures"] = [];
+  let carveMask: Uint8Array | null = null;
+  let carveInner: Float32Array | null = null;
+  if (opts.terrainSampler) {
+    const tol = params.earthworkTolerance;
+    const cut = Math.max(0.5, params.maxCut * (0.25 + 0.75 * tol)) + 2.5; // feature headroom
+    const fill = Math.max(0.5, params.maxFill * (0.25 + 0.75 * tol));
+    z = conformToTerrain(z, groundZ, ds, params.maxGrade, cut, fill);
+
+    // offset ground for cut-side detection (left/right of the corridor)
+    const gL = new Float64Array(n);
+    const gR = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const h = heading[i];
+      const nx = -Math.sin(h);
+      const ny = Math.cos(h);
+      const off = (props.widthL[i] + props.widthR[i]) / 2 + 9;
+      gL[i] = opts.terrainSampler(uni.x[i] + nx * off, uni.y[i] + ny * off);
+      gR[i] = opts.terrainSampler(uni.x[i] - nx * off, uni.y[i] - ny * off);
+    }
+    const halfW = new Float32Array(n);
+    for (let i = 0; i < n; i++) halfW[i] = Math.max(props.widthL[i], props.widthR[i]);
+    const st = classifyStructures({
+      seed,
+      z,
+      groundZ,
+      ds,
+      halfWidth: halfW,
+      groundLeft: gL,
+      groundRight: gR,
+    });
+    structures = st.spans;
+    carveMask = st.carveMask;
+    // narrow bench carving inside cuts so the hill closes in at the walls;
+    // wide gentle aprons elsewhere
+    carveInner = new Float32Array(n).fill(40);
+    for (const sp of structures) {
+      if (sp.kind !== "retaining" && sp.kind !== "rock-cut") continue;
+      const pad = Math.round(30 / ds);
+      const i0 = Math.round(sp.sStart / ds) % n;
+      const i1 = Math.round(sp.sEnd / ds) % n;
+      const spanLen = ((i1 - i0 + n) % n) || n;
+      for (let k = -pad; k < spanLen + pad; k++) {
+        const i = (i0 + k + n) % n;
+        carveInner[i] = Math.min(carveInner[i], halfW[i] + 7);
+      }
+    }
+
+    // conform to the hillside: on cross-slopes the road banks gently INTO
+    // the hill (like real mountain roads), scaled by terrain coupling
+    const coupling = character.identity.terrainCoupling;
+    if (coupling > 0.05) {
+      for (let i = 0; i < n; i++) {
+        const off = (props.widthL[i] + props.widthR[i]) / 2 + 9;
+        if (!Number.isFinite(gL[i]) || !Number.isFinite(gR[i])) continue;
+        const cross = (gL[i] - gR[i]) / (2 * off); // + = ground higher left
+        bank[i] += Math.max(-0.05, Math.min(0.05, cross * 0.55)) * coupling;
+      }
+      const smoothed = smoothCircular(bank, Math.max(1, 14 / ds));
+      bank.set(smoothed);
+    }
+  }
+
   // assemble samples
   const samples: TrackSample[] = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -187,7 +263,11 @@ export function buildTrack(
     terrain: opts.terrain ?? null,
     identity: character.identity,
     features: character.features,
+    zones: character.zones,
     props,
+    structures,
+    carveMask,
+    carveInner,
   };
   return { track, closureError: repaired.closureError };
 }

@@ -130,26 +130,31 @@ export interface TrackProximity {
   /** nearest track sample: horizontal distance + its elevation (null if far) */
   nearest(x: number, y: number, maxDist?: number): { d: number; z: number } | null;
   /** all samples within maxDist (for elevation-aware matching) */
-  within(x: number, y: number, maxDist: number): { d: number; z: number }[];
+  within(
+    x: number,
+    y: number,
+    maxDist: number,
+  ): { d: number; z: number; inner?: number; outer?: number }[];
 }
 
 /** Spatial-hash proximity index over track samples. */
 export function makeTrackProximity(
-  trackSamples: { x: number; y: number; z: number }[],
+  trackSamples: { x: number; y: number; z: number; ok?: boolean; inner?: number; outer?: number }[],
 ): TrackProximity {
   const bucketSize = 128;
   const buckets = new Map<string, number[]>();
   trackSamples.forEach((p, i) => {
+    if (p.ok === false) return; // structure-owned samples never carve
     const k = `${Math.floor(p.x / bucketSize)},${Math.floor(p.y / bucketSize)}`;
     let arr = buckets.get(k);
     if (!arr) buckets.set(k, (arr = []));
     arr.push(i);
   });
-  const gather = (x: number, y: number, maxDist: number): { d: number; z: number }[] => {
+  const gather = (x: number, y: number, maxDist: number) => {
     const bx = Math.floor(x / bucketSize);
     const by = Math.floor(y / bucketSize);
     const r = Math.ceil(maxDist / bucketSize);
-    const out: { d: number; z: number }[] = [];
+    const out: { d: number; z: number; inner?: number; outer?: number }[] = [];
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         const arr = buckets.get(`${bx + dx},${by + dy}`);
@@ -157,7 +162,7 @@ export function makeTrackProximity(
         for (const i of arr) {
           const p = trackSamples[i];
           const d = Math.hypot(p.x - x, p.y - y);
-          if (d <= maxDist) out.push({ d, z: p.z });
+          if (d <= maxDist) out.push({ d, z: p.z, inner: p.inner, outer: p.outer });
         }
       }
     }
@@ -183,14 +188,31 @@ export function makeTrackProximity(
  * into the landscape). Elevation-aware: where two track sections approach
  * a point, the one whose elevation is most compatible with the local
  * ground wins, so bridges/cuts don't flatten terrain to the wrong deck.
+ *
+ * carveMask: 1 = terrain may be pulled toward the road; 0 = a structure
+ * (bridge/tunnel) owns the gap and the terrain stays untouched. The carve
+ * target sits 0.4 m below the road surface so the ribbon always floats
+ * visibly proud of the flattened ground -- never z-fights, never clips.
  */
 export function carveSampler(
   grid: TerrainGrid,
   trackSamples: { x: number; y: number; z: number }[],
-  innerM = 26,
-  outerM = 110,
+  carveMask: Uint8Array | null = null,
+  innerM = 40,
+  outerM = 120,
+  /** per-sample inner flat widths (cut spans bench narrowly); null = uniform */
+  carveInner: Float32Array | null = null,
 ): (x: number, y: number) => number {
-  const proximity = makeTrackProximity(trackSamples);
+  const proximity = makeTrackProximity(
+    trackSamples.map((p, i) => ({
+      x: p.x,
+      y: p.y,
+      z: p.z - 0.4,
+      ok: !carveMask || carveMask[i] === 1,
+      inner: carveInner ? carveInner[i] : innerM,
+      outer: carveInner ? Math.max(outerM, carveInner[i] + 70) : outerM,
+    })),
+  );
   return (x: number, y: number) => {
     const gz = grid.elevationAt(x, y);
     if (Number.isNaN(gz)) return gz;
@@ -199,7 +221,7 @@ export function carveSampler(
     // overhead must not flatten the valley floor beneath it)
     const cands = proximity.within(x, y, outerM);
     if (cands.length === 0) return gz;
-    let best: { d: number; z: number } | null = null;
+    let best: { d: number; z: number; inner?: number; outer?: number } | null = null;
     let bestScore = Infinity;
     for (const c of cands) {
       const score = c.d + 2.5 * Math.abs(c.z - gz);
@@ -212,8 +234,10 @@ export function carveSampler(
     // extreme deviations are structures, not earthworks: leave the ground
     // alone (the deck floats overhead / the tunnel dives beneath)
     if (Math.abs(best.z - gz) > 45) return gz;
-    if (best.d <= innerM) return best.z;
-    const t = (best.d - innerM) / (outerM - innerM);
+    const inner = best.inner ?? innerM;
+    const outer = Math.max(best.outer ?? outerM, inner + 20);
+    if (best.d <= inner) return best.z;
+    const t = (best.d - inner) / (outer - inner);
     const s = t * t * (3 - 2 * t);
     return best.z * (1 - s) + gz * s;
   };
