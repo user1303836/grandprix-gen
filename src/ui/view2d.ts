@@ -327,6 +327,7 @@ export class View2D {
     this.drawFeatureLabels(track);
     this.drawLegend(track);
     this.drawPitLane(track);
+    this.drawSectorTicks(track);
     this.drawSpeedHeat(track);
     this.drawDirectionArrows(track);
     this.drawLapDot(track);
@@ -766,6 +767,33 @@ export class View2D {
       ctx.fill();
       sAcc += len;
     }
+  }
+
+  /** Sector boundary ticks + labels. */
+  private drawSectorTicks(track: Track): void {
+    if (!track.sectors || track.sectors.length === 0) return;
+    const ctx = this.ctx;
+    const n = track.samples.length;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.font = `700 ${9 * dpr}px ui-monospace, monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    track.sectors.forEach((sec, si) => {
+      if (si === 0) return; // s=0 is start/finish itself
+      const i = Math.round(sec.sStart / track.ds) % n;
+      const p = track.samples[i];
+      const nx = -Math.sin(p.heading);
+      const ny = Math.cos(p.heading);
+      const w = p.width / 2 + 6;
+      ctx.strokeStyle = "rgba(90,184,255,0.65)";
+      ctx.lineWidth = 1.6 * dpr;
+      ctx.beginPath();
+      ctx.moveTo(this.wx(p.x + nx * w), this.wy(p.y + ny * w));
+      ctx.lineTo(this.wx(p.x - nx * w), this.wy(p.y - ny * w));
+      ctx.stroke();
+      ctx.fillStyle = "rgba(90,184,255,0.85)";
+      ctx.fillText(`S${si}`, this.wx(p.x + nx * (w + 14)), this.wy(p.y + ny * (w + 14)));
+    });
   }
 
   /** Pit lane ribbon (parallel on the right of the main straight). */
