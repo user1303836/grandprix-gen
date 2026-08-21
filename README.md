@@ -1,5 +1,7 @@
 # grandprix-gen
 
+![golden-hour viaduct on a generated mountain circuit](docs/hero.png)
+
 **Procedural racetrack generator / parametric circuit-design sandbox.**
 
 Not a "random squiggly loop" toy — a lightweight experimental circuit-design
