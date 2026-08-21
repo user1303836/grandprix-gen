@@ -120,11 +120,13 @@ export function runSearch(job: SearchJob): SearchOut {
         };
       })()
     : {};
+  const grid2 = job.terrain ? dataToGrid(job.terrain) : null;
   const result = searchCandidates(job.seed, job.params, {
     vehicle,
     candidates: job.count,
     keep: job.keep,
     onProgress: job.onProgress,
+    siteHalfSpan: grid2 ? (Math.min(grid2.width, grid2.height) * grid2.resolution) / 2 : undefined,
     candidateCost: job.terrain
       ? (track) => {
           const grid = dataToGrid(job.terrain!);

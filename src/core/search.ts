@@ -6,7 +6,7 @@
 import { generateValidTrack } from "./generator";
 import { computeMetrics, metricDistance, metricVector, scoreAgainstRequest, type CircuitMetrics } from "./metrics";
 import { computeSpeedProfile, type VehicleSpec, VEHICLE_PRESETS } from "./vehicle";
-import { saltSeed } from "./prng";
+import { Rng, saltSeed } from "./prng";
 import type { BuildOptions } from "./build";
 import type { Track, TrackParams } from "./types";
 
@@ -26,6 +26,8 @@ export interface SearchOptions extends BuildOptions {
   candidateCost?: (track: Track) => number;
   costWeight?: number;
   onProgress?: (done: number, total: number) => void;
+  /** When set (site mode), candidates relocate within +-this radius. */
+  siteHalfSpan?: number;
 }
 
 export interface SearchResult {
@@ -48,9 +50,25 @@ export function searchCandidates(
 
   const valid: Candidate[] = [];
   let evaluated = 0;
+  const placeRng = Rng.fromSalt(seed, 5519);
   for (let i = 0; i < total; i++) {
     const sub = saltSeed(seed, 501 + i * 37);
-    const r = generateValidTrack(sub, params, opts, 6);
+    let genOpts: SearchOptions = opts;
+    if (opts.siteHalfSpan && opts.terrainSampler) {
+      const ang = placeRng.range(0, Math.PI * 2);
+      const rad = i === 0 ? 0 : placeRng.range(0, opts.siteHalfSpan * 0.42);
+      genOpts = {
+        ...opts,
+        maxFootprintRadius: Math.max(
+          opts.siteHalfSpan * 0.3,
+          ((opts.maxFootprintRadius ?? opts.siteHalfSpan * 0.72) / (opts.siteHalfSpan * 0.72)) *
+            (opts.siteHalfSpan - rad) *
+            0.8,
+        ),
+        centerOffset: { x: Math.cos(ang) * rad, y: Math.sin(ang) * rad },
+      };
+    }
+    const r = generateValidTrack(sub, params, genOpts, 6);
     evaluated++;
     opts.onProgress?.(i + 1, total);
     if (!r.track) continue;

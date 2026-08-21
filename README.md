@@ -66,19 +66,52 @@ Keyboard: `g` generate · `1/2/3` views · `⌘Z` undo.
 
 ### Heterogeneous circuit model
 
-The ribbon is not homogeneous. Every generated circuit rolls a latent
-**identity** (era: classic/hybrid/modern, roughness + width-variation
-baselines, runoff/kerb/barrier styles, terrain coupling, naming flavor) and a
-set of **localized features** anchored to the structural DNA: banked concrete
-bowls (karussell), blind/jump crests, compressions, resurfaced zones, legacy
-narrows, wall runs, mixed-surface patches, widened braking zones. Features
-alter several properties *simultaneously* -- geometry (banking, width, vertical
-profile), surface, roughness, grip, kerbs, runoff, barriers -- and get
-generated **place names**, so a lap develops recognizable places instead of
-uniform procedural road. Physical properties vary per sample along s:
-asymmetric widths, surface kind, roughness, grip, crossfall, kerb kind, runoff
-kind + width, barrier distance. The vehicle model reads grip/roughness per
+The ribbon is not homogeneous. Variation lives on **three spatial scales**:
+
+- **micro (~meters)** -- pavement seams every ~28 m, concrete slab joints,
+  patched repair bands, per-station micro-bumps scaled by roughness, kerb
+  mottle. Visual-only; physics stays clean.
+- **local (tens/hundreds of meters)** -- 28 kinds of localized *features*
+  anchored to the structural DNA: banked concrete bowls (karussell),
+  blind/jump crests, compressions (incl. major), corner-over-crest and
+  corner-in-compression composites, off-camber / cambered / heavily-banked /
+  concrete-lined corners, rough zones, resurfaced patches, drainage dips,
+  downhill/uphill braking zones, widened passing areas, crown transitions,
+  legacy narrows, wall runs, retaining-wall runs, narrow shoulders,
+  sausage/old-low/high kerb sections, service-road crossings, pit lane with
+  tapered merge. Each alters several properties *simultaneously* (geometry,
+  surface, grip, kerbs, runoff, barriers) and gets a generated **place
+  name**, so a lap develops recognizable places.
+- **sector (~kilometers)** -- named character zones (historic / rebuilt /
+  mountain / developed / open / confined) bias width, roughness, runoff and
+  barrier distances across whole sections, with long smooth ramps between.
+
+All of it emerges from a latent **circuit identity** (era, construction
+style, roughness and width-variation baselines, terrain coupling), not from
+independent per-meter noise. The vehicle model reads grip/roughness per
 sample; the same circuit laps differently as its surface changes.
+
+### Terrain conformance & structures
+
+In site mode the road never clips the land. The vertical design treats
+
+1. the **floor** (z >= ground - maxCut) as a hard constraint -- burial is
+   forbidden,
+2. the **grade limit** as hard,
+3. the **fill ceiling** as soft -- where the land is steeper than the road
+   may climb, the road leaves the band *upward* and a structure owns the gap.
+
+An exact raise-only floor+slope solver (tripled-domain circular envelope)
+guarantees 1+2; span classification then turns deviations into civil
+engineering: **viaducts** (deck edge beams, parapets, piers every ~32 m down
+to the ground), **embankments** (grass skirts), **retaining walls** and
+**rock cuts** on hillsides, and **tunnels** (tube + portals) under ridges.
+Terrain carving seats the road 0.4 m proud of a flattened corridor, benches
+narrowly into cuts, and leaves the ground alone under bridges and over
+tunnels. Site search candidates relocate within the site and are scored by
+cross-slope, earthwork (with a superlinear penalty on giant fills),
+contour-following, and building overlap (OSM footprints; soft cost or hard
+rejection).
 
 ## Architecture
 
