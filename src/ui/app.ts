@@ -51,6 +51,12 @@ export class App {
 
   constructor(root: HTMLElement) {
     (window as unknown as { __app: App }).__app = this; // dev/debug handle
+    window.addEventListener("unhandledrejection", (ev) => {
+      console.error("unhandled rejection", ev.reason);
+      this.setBusy(`ERROR: ${ev.reason instanceof Error ? ev.reason.message.slice(0, 90) : "unexpected error"}`, null);
+      setTimeout(() => this.setBusy(null, null), 3000);
+      ev.preventDefault();
+    });
     const shell = el("div", { className: "app-shell" });
 
     // toolbar
@@ -338,6 +344,9 @@ export class App {
       }
     } catch (e) {
       console.error(e);
+      // generation must fail WITH WORDS, never silently crash
+      this.setBusy(`GENERATION FAILED: ${e instanceof Error ? e.message.slice(0, 90) : "unknown error"}`, null);
+      setTimeout(() => this.setBusy(null, null), 3000);
     } finally {
       if (this.store.state.busy?.startsWith("GENERATING")) this.setBusy(null, null);
     }
@@ -465,9 +474,15 @@ export class App {
         });
         if (out) {
           this.adoptAnalysis(out, `struct ${String(key)}`);
+          this.setBusy(null, null);
+        } else {
+          this.setBusy("NO VALID STRUCTURE FOR THOSE PARAMETERS", null);
+          setTimeout(() => this.setBusy(null, null), 2200);
         }
-      } finally {
-        this.setBusy(null, null);
+      } catch (e) {
+        console.error(e);
+        this.setBusy(`STRUCTURE FAILED: ${e instanceof Error ? e.message.slice(0, 80) : "error"}`, null);
+        setTimeout(() => this.setBusy(null, null), 2600);
       }
     })();
   }

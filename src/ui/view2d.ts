@@ -59,17 +59,38 @@ export class View2D {
   }
 
   private attachEvents(container: HTMLElement): void {
-    this.canvas.addEventListener("mousedown", (e) => {
+    let downX = 0;
+    let downY = 0;
+    let moved = false;
+    this.canvas.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return; // left button only
       this.dragging = true;
+      moved = false;
+      downX = e.clientX;
+      downY = e.clientY;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
+      this.canvas.setPointerCapture(e.pointerId);
     });
-    window.addEventListener("mouseup", () => (this.dragging = false));
-    window.addEventListener("mousemove", (e) => {
+    this.canvas.addEventListener("pointerup", (e) => {
+      this.dragging = false;
+      try {
+        this.canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        // already released
+      }
+    });
+    this.canvas.addEventListener("pointercancel", () => (this.dragging = false));
+    this.canvas.addEventListener("pointermove", (e) => {
       if (this.dragging) {
         const dpr = window.devicePixelRatio || 1;
-        this.camX += (e.clientX - this.lastX) * dpr;
-        this.camY += (e.clientY - this.lastY) * dpr;
+        const dx = e.clientX - this.lastX;
+        const dy = e.clientY - this.lastY;
+        // tiny dead-zone so clicks don't micro-pan
+        if (!moved && Math.hypot(e.clientX - downX, e.clientY - downY) < 4) return;
+        moved = true;
+        this.camX += dx * dpr;
+        this.camY += dy * dpr;
         this.lastX = e.clientX;
         this.lastY = e.clientY;
       }
