@@ -41,6 +41,7 @@ import {
   BoxGeometry,
   IcosahedronGeometry,
   PlaneGeometry,
+  CircleGeometry,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -221,6 +222,8 @@ export class View3D {
   driveSpeedMult = 1;
   driveCamHeight = 1.7;
   driveChase = false;
+  driveTV = false;
+  private tvCamPos: { x: number; y: number; z: number } | null = null;
   private lastT = 0;
 
   constructor(container: HTMLElement) {
@@ -263,6 +266,7 @@ export class View3D {
     this.hud = new DriveHUD(this.container);
     this.scene.add(this.rain.points);
     this.setupWeatherControl();
+    this.setupCamControl();
     this.cars = [
       { group: buildCar(0x2a52c8), s: 0, factor: 1 },
       { group: buildCar(0xc83a2a), s: 0.4, factor: 1.045 },
@@ -412,6 +416,7 @@ export class View3D {
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
+      this.addPuddles(track);
       this.maybeFitCamera(track, state.terrain);
       this.rebuildFloodlights();
     }
@@ -710,6 +715,29 @@ export class View3D {
     this.controls.autoRotateSpeed = 0.55;
   }
 
+  /** Drive camera: cockpit / chase / tv. */
+  private camControl: HTMLDivElement | null = null;
+  private setupCamControl(): void {
+    const wrap = document.createElement("div");
+    wrap.className = "day-control cam-control";
+    for (const m of ["cockpit", "chase", "tv"] as const) {
+      const b = document.createElement("button");
+      b.textContent = m === "tv" ? "TV" : m;
+      b.dataset.cam = m;
+      if (m === "cockpit") b.classList.add("active");
+      b.addEventListener("click", () => {
+        this.driveChase = m !== "cockpit";
+        this.driveTV = m === "tv";
+        this.tvCamPos = null;
+        wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+      });
+      wrap.appendChild(b);
+    }
+    wrap.style.display = "none";
+    this.container.appendChild(wrap);
+    this.camControl = wrap;
+  }
+
   private weatherControl: HTMLDivElement | null = null;
   private setupWeatherControl(): void {
     const wrap = document.createElement("div");
@@ -751,6 +779,7 @@ export class View3D {
       });
       // terrain darkens when soaked
       this.rain.setActive(this.wetFactor > 0.25);
+      if (this.puddles) this.puddles.visible = this.wetFactor > 0.25;
     }
   }
 
@@ -1565,6 +1594,44 @@ export class View3D {
     this.trackGroup!.add(inst);
   }
 
+  /** Puddles on the road in the wet (mirror-gloss patches). */
+  private puddles: InstancedMesh | null = null;
+  private addPuddles(track: Track): void {
+    const rng = new Rng(track.seed ^ 0x9dd1);
+    const mats: Matrix4[] = [];
+    const n = track.samples.length;
+    const stride = Math.max(1, Math.round(42 / track.ds));
+    for (let i = 0; i < n; i += stride) {
+      if (rng.next() < 0.45) continue;
+      const smp = track.samples[i];
+      const off = rng.spread(Math.min(track.props.widthL[i], track.props.widthR[i]) * 0.5);
+      const nx = -Math.sin(smp.heading);
+      const ny = Math.cos(smp.heading);
+      const m4 = new Matrix4().makeRotationY(-smp.heading + rng.spread(0.4));
+      m4.setPosition(smp.x + nx * off, smp.z + 0.035, -smp.y - ny * off);
+      m4.scale(new Vector3(1.2 + rng.next() * 2.6, 1, 0.9 + rng.next() * 1.8));
+      mats.push(m4);
+    }
+    const geo = new CircleGeometry(1, 18);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new MeshStandardMaterial({
+      color: 0x1a2028,
+      roughness: 0.05,
+      metalness: 0.85,
+      transparent: true,
+      opacity: 0.85,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+    });
+    this.puddles = new InstancedMesh(geo, mat, mats.length);
+    mats.forEach((m4, i) => this.puddles!.setMatrixAt(i, m4));
+    this.puddles.instanceMatrix.needsUpdate = true;
+    this.puddles.receiveShadow = true;
+    this.puddles.name = "puddles";
+    this.puddles.visible = this.wetFactor > 0.25;
+    this.trackGroup!.add(this.puddles);
+  }
+
   /** Small instanced grass tufts hugging the corridor (close-up richness). */
   private addGrassTufts(grid: TerrainGrid, track: Track): void {
     const rng = new Rng(track.seed ^ 0x6a55);
@@ -1619,6 +1686,8 @@ export class View3D {
       this.driveActivePrev = this.driveActive;
       this.hud.setVisible(this.driveActive);
       if (this.driveActive) this.baseFov = this.camera.fov;
+      else this.tvCamPos = null;
+      if (this.camControl) this.camControl.style.display = this.driveActive ? "flex" : "none";
     }
     if (this.driveActive && state.track) {
       this.controls.enabled = false;
@@ -1657,7 +1726,31 @@ export class View3D {
       const lookS = (this.driveS + (this.driveChase ? 25 : 45)) % track.length;
       const ahead = sampleAt(track, lookS);
       const h = this.driveCamHeight;
-      if (this.driveChase) {
+      if (this.driveTV) {
+        // spectator TV camera: posted at a slow corner, pans to the nearest car
+        if (!this.tvCamPos) {
+          const slowest = track.corners.reduce((a, b) => (a.minRadius < b.minRadius ? a : b));
+          const i = Math.round(slowest.sApex / track.ds) % track.samples.length;
+          const smp = track.samples[i];
+          const side = slowest.direction === "L" ? -1 : 1;
+          const nx = -Math.sin(smp.heading);
+          const ny = Math.cos(smp.heading);
+          const off = side * (Math.max(track.props.widthL[i], track.props.widthR[i]) + 26);
+          this.tvCamPos = { x: smp.x + nx * off, y: smp.z + 16 - off * Math.sin(smp.bank), z: -smp.y - ny * off };
+        }
+        this.camera.position.set(this.tvCamPos.x, this.tvCamPos.y, this.tvCamPos.z);
+        // track the nearest car
+        let bestD = Infinity;
+        let target: Vector3 | null = null;
+        for (const c of this.cars) {
+          const d = c.group.position.distanceToSquared(this.camera.position);
+          if (d < bestD) {
+            bestD = d;
+            target = c.group.position;
+          }
+        }
+        if (target) this.camera.lookAt(target.x, target.y + 0.8, target.z);
+      } else if (this.driveChase) {
         const backS = (this.driveS - 19 + track.length) % track.length;
         const back = sampleAt(track, backS);
         this.camera.position.set(back.x, back.z + 7.6, -back.y);

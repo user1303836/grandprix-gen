@@ -130,13 +130,20 @@ The 3D view is built to be looked at, not just inspected:
   corners), skid patches at braking entries, asphalt speckle, grass blade
   and gravel textures, castellated aggressive/sausage kerbs.
 - **Trackside**: distance boards (150/100/50) at corner entries, seeded
-  sponsor billboards, start gantry + painted grid slots, grandstands with
-  colored seats, marshal posts, pit lane with tapered merge.
+  sponsor billboards, start gantry + painted grid slots + checkered line,
+  grandstands with colored seat rows, marshal posts, tire walls at heavy
+  braking zones, corner name boards at the famous places, pit lane with
+  tapered merge and a colored-door pit garage row, waving checkered flag.
+  At night the floodlights throw volumetric shafts and the town windows
+  light up.
 - **Nature**: two tree species with trunks (conifers take the high
   ground), animated ripple water with sun glint, drifting cloud shadows.
 - **Drive mode**: HUD (speed/gear/rpm, pedal trace, lap timer, mini map,
   feature flash), FOV kick at speed, roughness-scaled camera shake
-  (heritage circuits ride genuinely rough), headlight in the dark.
+  (heritage circuits ride genuinely rough), headlight in the dark, and a
+  cockpit / chase / TV spectator camera switch (TV posts at the slowest
+  corner and pans after the nearest car). A three-car field laps at
+  slightly offset paces and kicks up spray plumes in the wet.
 - **CINEMA** button for an auto-orbiting aerial shot, and a camera button
   that saves the current frame as PNG.
 - The **2D map** is a live schematic: speed-heat ribbon (red apices,
