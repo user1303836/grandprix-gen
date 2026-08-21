@@ -96,6 +96,37 @@ export function makeGrassTexture(seed = 4242): CanvasTexture {
   return tex;
 }
 
+/** Mowed infield: alternating light/dark grass stripes. */
+export function makeMownGrassTexture(seed = 5150): CanvasTexture {
+  const S = 256;
+  const cv = document.createElement("canvas");
+  cv.width = S;
+  cv.height = S;
+  const ctx = cv.getContext("2d")!;
+  const rnd = seededRandom(seed);
+  for (let band = 0; band < 8; band++) {
+    ctx.fillStyle = band % 2 === 0 ? "#e2e8d2" : "#d2dcbc";
+    ctx.fillRect(0, band * 32, S, 32);
+  }
+  // blade flecks
+  for (let k = 0; k < 2600; k++) {
+    const g = 165 + rnd() * 70;
+    ctx.strokeStyle = `rgba(${120 + rnd() * 60},${g},${100 + rnd() * 40},${0.16 + rnd() * 0.26})`;
+    const x = rnd() * S;
+    const y = rnd() * S;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + (rnd() - 0.5) * 2.5, y - 1 - rnd() * 2.5);
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
+  }
+  const tex = new CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = RepeatWrapping;
+  tex.colorSpace = SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
 /** Concrete: pale gray with formwork panel lines + weathering streaks. */
 export function makeConcreteTexture(seed = 919): CanvasTexture {
   const S = 256;

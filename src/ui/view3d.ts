@@ -51,7 +51,7 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
-import { makeAsphaltTexture, makeConcreteTexture, makeGrassTexture, makeGravelTexture } from "./textures";
+import { makeAsphaltTexture, makeConcreteTexture, makeGrassTexture, makeGravelTexture, makeMownGrassTexture } from "./textures";
 import { buildFurniture, windUniform } from "./furniture";
 import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
@@ -242,6 +242,7 @@ export class View3D {
   private grassTex = makeGrassTexture();
   private gravelTex = makeGravelTexture();
   private concreteTex = makeConcreteTexture();
+  private mownTex = makeMownGrassTexture();
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
   private sky: SkyDome;
@@ -553,9 +554,9 @@ export class View3D {
       const gm = buildGridMesh(() => -0.08, -span / 2, -span / 2, span / 2, span / 2, 2, 2);
       const ground = this.gridMesh(gm.positions, gm.indices, 0x51683c);
       const gmat = ground.material as MeshStandardMaterial;
-      this.grassTex.repeat.set(span / 26, span / 26);
-      gmat.map = this.grassTex;
-      gmat.color.setHex(0x8a9a72);
+      this.mownTex.repeat.set(span / 52, span / 52);
+      gmat.map = this.mownTex;
+      gmat.color.setHex(0x9aa87e);
       ground.receiveShadow = true;
       this.trackGroup.add(ground);
     }
@@ -596,8 +597,24 @@ export class View3D {
     const span = estimateSpan(track);
     const terrainMaxZ = terrain ? terrain.maxElevation : c.z;
     const camY = Math.max(c.z + span * 0.55, terrainMaxZ + span * 0.25);
-    this.camera.position.set(c.x + span * 0.62, camY, -c.y + span * 0.62);
+    const endX = c.x + span * 0.62;
+    const endZ = -c.y + span * 0.62;
+    if (!this.didIntro) {
+      // cinematic swoop: start far/high, ease into the frame
+      this.didIntro = true;
+      this.swoop = {
+        t: 0,
+        from: new Vector3(endX + span * 1.6, camY * 2.6 + 600, endZ - span * 2.2),
+        to: new Vector3(endX, camY, endZ),
+      };
+      this.camera.position.set(endX + span * 1.6, camY * 2.6 + 600, endZ - span * 2.2);
+    } else {
+      this.camera.position.set(endX, camY, endZ);
+    }
   }
+
+  private didIntro = false;
+  private swoop: { t: number; from: Vector3; to: Vector3 } | null = null;
 
   /**
    * Fit ONLY on the very first build or when the site (terrain) changed --
@@ -1207,6 +1224,13 @@ export class View3D {
     }
     const geo = new BufferGeometry();
     geo.setAttribute("position", new BufferAttribute(pos, 3));
+    // world uvs for ground textures
+    const uvs = new Float32Array(pos.length / 3 * 2);
+    for (let i = 0; i < pos.length / 3; i++) {
+      uvs[i * 2] = pos[i * 3] / 52;
+      uvs[i * 2 + 1] = pos[i * 3 + 2] / 52;
+    }
+    geo.setAttribute("uv", new BufferAttribute(uvs, 2));
     geo.setIndex(new BufferAttribute(indices, 1));
     geo.computeVertexNormals();
     const mat = new MeshStandardMaterial({
@@ -1981,6 +2005,13 @@ export class View3D {
       this.updateFloodlights();
     } else {
       if (this.headlight) this.headlight.intensity = 0;
+      if (this.swoop) {
+        this.swoop.t += dt / 2.2;
+        const t = Math.min(1, this.swoop.t);
+        const e = 1 - Math.pow(1 - t, 3);
+        this.camera.position.lerpVectors(this.swoop.from, this.swoop.to, e);
+        if (t >= 1) this.swoop = null;
+      }
       // the field keeps lapping in orbit view at a relaxed pace
       if (state.track) {
         this.orbitCarS = ((this.orbitCarS ?? 0) + dt * 52) % state.track.length;
