@@ -175,8 +175,8 @@ const SKY_PRESETS: Record<DayTime, SkyPreset> = {
     floodlights: false,
   },
   dusk: {
-    sunElevation: 4.5, sunAzimuth: 262, sunColor: 0xff9a5c, sunIntensity: 1.5,
-    ambientColor: 0x7a7a92, ambientIntensity: 0.36,
+    sunElevation: 4.5, sunAzimuth: 262, sunColor: 0xffa86e, sunIntensity: 1.15,
+    ambientColor: 0x84849a, ambientIntensity: 0.42,
     turbidity: 9, rayleigh: 3.6, mieCoefficient: 0.014, mieDirectionalG: 0.9,
     fogColor: 0x7a6e88, fogNearK: 2.8, fogFarK: 9.5, exposure: 0.98, bloom: 0.34,
     floodlights: true,
@@ -189,6 +189,42 @@ const SKY_PRESETS: Record<DayTime, SkyPreset> = {
     floodlights: true,
   },
 };
+
+class ValleyMist {
+  readonly mesh: Mesh;
+  private mat: ShaderMaterial;
+  constructor() {
+    this.mat = new ShaderMaterial({
+      uniforms: { time: { value: 0 }, strength: { value: 0 } },
+      vertexShader: "varying vec3 vWorld; void main(){ vec4 w = modelMatrix * vec4(position,1.0); vWorld = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }",
+      fragmentShader:
+        "varying vec3 vWorld; uniform float time; uniform float strength;" +
+        "float h(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }" +
+        "float vn(vec2 p){ vec2 i=floor(p); vec2 f=fract(p); vec2 u=f*f*(3.0-2.0*f);" +
+        " return mix(mix(h(i),h(i+vec2(1,0)),u.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),u.x),u.y); }" +
+        "float fb(vec2 p){ float v=0.0; float a=0.5; for(int i=0;i<4;i++){ v+=a*vn(p); p=p*2.13+17.7; a*=0.52; } return v; }" +
+        "void main(){ vec2 p = vWorld.xz * 0.0009 + vec2(time*0.006, time*0.002);" +
+        " float m = fb(p); float a = smoothstep(0.42, 0.72, m) * strength;" +
+        " gl_FragColor = vec4(0.82, 0.86, 0.9, a); }",
+      transparent: true,
+      depthWrite: false,
+    });
+    this.mesh = new Mesh(new PlaneGeometry(1, 1), this.mat);
+    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.renderOrder = 6;
+  }
+  configure(cx: number, cz: number, y: number, size: number, strength: number): void {
+    this.mesh.position.set(cx, y, cz);
+    this.mesh.scale.set(size, size, 1);
+    this.mat.uniforms.strength.value = strength;
+  }
+  setTime(t: number): void {
+    this.mat.uniforms.time.value = t;
+  }
+  lerpStrength(target: number, k: number): void {
+    this.mat.uniforms.strength.value += (target - this.mat.uniforms.strength.value) * k;
+  }
+}
 
 export class View3D {
   private container: HTMLElement;
@@ -476,6 +512,15 @@ export class View3D {
         SKY_PRESETS[this.dayTime].floodlights ? 0 : 0.3,
       );
       this.trackGroup.add(this.cloudShadows.mesh);
+      // valley mist hugs the low ground (dusk/night/dawn feel)
+      this.valleyMist.configure(
+        g.originX + (g.width * g.resolution) / 2,
+        -(g.originY + (g.height * g.resolution) / 2),
+        g.minElevation + 10,
+        spanC * 1.4,
+        0,
+      );
+      this.trackGroup.add(this.valleyMist.mesh);
       this.addTrees(state.terrain, track);
       this.addGrassTufts(state.terrain, track);
       this.addBoulders(state.terrain, track);
@@ -1502,6 +1547,7 @@ export class View3D {
   private driveActivePrev = false;
   private orbitCarS = 0;
   private cloudShadows = new CloudShadows();
+  private valleyMist = new ValleyMist();
   private windTime = { value: 0 };
   private hud: DriveHUD;
 
@@ -1919,6 +1965,10 @@ export class View3D {
     this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.sky.setTime(tNow);
     this.cloudShadows.setTime(tNow);
+    this.valleyMist.setTime(tNow);
+    // mist strongest at dusk/night, faint at golden, none at noon
+    const mistTarget = this.dayTime === "dusk" ? 0.34 : this.dayTime === "night" ? 0.26 : this.dayTime === "golden" ? 0.12 : 0;
+    this.valleyMist.lerpStrength(mistTarget, Math.min(1, dt));
     this.updateFlare();
     this.windTime.value = tNow;
     windUniform.value = tNow;
