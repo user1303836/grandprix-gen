@@ -54,6 +54,8 @@ export interface AppState {
   showCorners: boolean;
   showControlPoints: boolean;
   showTerrainHeat: boolean;
+  /** Civil debug overlay: structure-kind coloring + violations. */
+  debugCivil: boolean;
   selectedS: number | null;
   /** Locked section (stations kept when regenerating the rest). */
   lockRange: { sStart: number; sEnd: number } | null;
@@ -91,6 +93,7 @@ export class Store {
       showCorners: true,
       showControlPoints: false,
       showTerrainHeat: true,
+      debugCivil: false,
       selectedS: null,
       lockRange: null,
       busy: null,

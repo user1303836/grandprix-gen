@@ -6,6 +6,7 @@
 import type { AppState, HeatLayer } from "./state";
 import type { Track, TrackSample } from "../core/types";
 import type { TerrainGrid } from "../core/terrain";
+import { Corridor } from "../core/corridor";
 import {
   FeatureColors,
   FeatureLabels,
@@ -321,6 +322,7 @@ export class View2D {
 
     this.drawZoneTints(track);
     this.drawFeatureUnderlays(track);
+    if (state.debugCivil) this.drawCivilOverlay(track);
     this.drawTrack(state, track);
     if (state.lockRange) this.drawLockRange(track, state.lockRange);
     if (state.showCorners) this.drawCornerNumbers(track);
@@ -334,6 +336,8 @@ export class View2D {
     this.drawStartFinish(track);
     if (state.showControlPoints) this.drawDebug(track);
     if (this.hoverS !== null) this.drawHoverMarker(track, this.hoverS, dpr);
+    if (this.hoverS !== null && state.debugCivil) this.drawInspector(state, this.hoverS);
+    else if (this.inspector) this.inspector.style.display = "none";
   }
 
   private drawLockRange(track: Track, lock: { sStart: number; sEnd: number }): void {
@@ -917,6 +921,57 @@ export class View2D {
     ctx.shadowBlur = 0;
   }
 
+  /** Civil debug: color the band by structure kind, violations in red. */
+  private drawCivilOverlay(track: Track): void {
+    const civ = track.civil;
+    if (!civ) return;
+    const ctx = this.ctx;
+    const n = track.samples.length;
+    const colors: Record<string, string> = {
+      "at-grade": "rgba(90,180,90,0.55)",
+      "open-cut": "rgba(200,120,60,0.6)",
+      bench: "rgba(190,150,80,0.6)",
+      embankment: "rgba(120,170,90,0.55)",
+      terraced: "rgba(100,150,110,0.6)",
+      retaining: "rgba(160,120,90,0.65)",
+      "dual-retaining": "rgba(150,100,110,0.65)",
+      platform: "rgba(150,150,160,0.6)",
+      shelf: "rgba(120,140,180,0.6)",
+      "short-bridge": "rgba(90,160,220,0.65)",
+      viaduct: "rgba(60,120,220,0.7)",
+      tunnel: "rgba(80,70,120,0.75)",
+      gallery: "rgba(110,90,160,0.65)",
+    };
+    ctx.lineCap = "round";
+    const step = Math.max(1, Math.round(3 / track.ds));
+    for (let i = 0; i < n; i += step) {
+      const a = track.samples[i];
+      const b = track.samples[(i + step) % n];
+      ctx.strokeStyle = colors[civ.stateAt[i]] ?? "rgba(150,150,150,0.5)";
+      ctx.lineWidth = Math.max(2, (a.width + 8) * this.scale);
+      ctx.beginPath();
+      ctx.moveTo(this.wx(a.x), this.wy(a.y));
+      ctx.lineTo(this.wx(b.x), this.wy(b.y));
+      ctx.stroke();
+    }
+    // violations: bright red ticks
+    if (!civ.feasible) {
+      ctx.fillStyle = "#ff2a1a";
+      for (const v of civ.violations) {
+        const m = /@(\d+\.\d+)k/.exec(v);
+        if (!m) continue;
+        const sAt = parseFloat(m[1]) * 1000;
+        const i = Math.round(sAt / track.ds) % n;
+        const p = track.samples[i];
+        const nx = -Math.sin(p.heading);
+        const ny = Math.cos(p.heading);
+        ctx.beginPath();
+        ctx.arc(this.wx(p.x + nx * (p.width / 2 + 8)), this.wy(p.y + ny * (p.width / 2 + 8)), 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
   /** Kilometer-scale zone halos under everything. */
   private drawZoneTints(track: Track): void {
     const zones = track.zones ?? [];
@@ -1065,6 +1120,99 @@ export class View2D {
     ctx.strokeStyle = "#ffb454";
     ctx.lineWidth = 2;
     ctx.stroke();
+  }
+
+  private inspector: HTMLCanvasElement | null = null;
+
+  /** Cross-section inspector: ground vs corridor at the hover station. */
+  private drawInspector(state: AppState, sHover: number): void {
+    if (!this.inspector) {
+      const cv = document.createElement("canvas");
+      cv.width = 300;
+      cv.height = 150;
+      cv.style.cssText = "position:absolute;right:12px;bottom:12px;z-index:24;background:rgba(10,13,17,0.9);border:1px solid rgba(255,255,255,0.1);border-radius:8px;pointer-events:none";
+      this.canvas.parentElement!.appendChild(cv);
+      this.inspector = cv;
+    }
+    const cv = this.inspector;
+    const track = state.track!;
+    const civ = track.civil;
+    if (!state.terrain || !civ) {
+      cv.style.display = "none";
+      return;
+    }
+    cv.style.display = "block";
+    const ctx = cv.getContext("2d")!;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const n = track.samples.length;
+    const i = Math.round(sHover / track.ds) % n;
+    const smp = track.samples[i];
+    const corridor = new Corridor(track);
+    const kind = civ.stateAt[i];
+    const plat = corridor.platformHalf(i);
+    const range = Math.max(plat.l, plat.r) + 14;
+    // sample ground + corridor across the section
+    const nx = -Math.sin(smp.heading);
+    const ny = Math.cos(smp.heading);
+    const NPTS = 61;
+    const gz: number[] = [];
+    const cz: number[] = [];
+    let zMin = Infinity;
+    let zMax = -Infinity;
+    for (let k = 0; k < NPTS; k++) {
+      const off = -range + (2 * range * k) / (NPTS - 1);
+      const g = state.terrain!.elevationAt(smp.x + nx * off, smp.y + ny * off);
+      const gz2 = Number.isFinite(g) ? g : smp.z;
+      const cz2 = corridor.surface(i * track.ds, off).z;
+      gz.push(gz2);
+      cz.push(cz2);
+      if (gz2 < zMin) zMin = gz2;
+      if (gz2 > zMax) zMax = gz2;
+      if (cz2 < zMin) zMin = cz2;
+      if (cz2 > zMax) zMax = cz2;
+    }
+    const span = Math.max(2, zMax - zMin);
+    const X = (off: number) => ((off + range) / (2 * range)) * cv.width;
+    const Y = (z: number) => cv.height - 24 - ((z - zMin) / span) * (cv.height - 44);
+    // ground fill
+    ctx.beginPath();
+    ctx.moveTo(0, cv.height);
+    for (let k = 0; k < NPTS; k++) ctx.lineTo(X(-range + (2 * range * k) / (NPTS - 1)), Y(gz[k]));
+    ctx.lineTo(cv.width, cv.height);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(90,120,70,0.55)";
+    ctx.fill();
+    // corridor line
+    ctx.beginPath();
+    for (let k = 0; k < NPTS; k++) {
+      const x = X(-range + (2 * range * k) / (NPTS - 1));
+      const y = Y(cz[k]);
+      if (k === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = "#e8e8e8";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // platform limits
+    ctx.strokeStyle = "rgba(90,184,255,0.5)";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(X(-plat.l), 0);
+    ctx.lineTo(X(-plat.l), cv.height);
+    ctx.moveTo(X(plat.r), 0);
+    ctx.lineTo(X(plat.r), cv.height);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // labels
+    ctx.fillStyle = "#c8d0da";
+    ctx.font = "600 11px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.fillText(kind, 8, 14);
+    ctx.fillStyle = "#8a94a2";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText(`z ${smp.z.toFixed(1)}  ground ${smp.groundZ.toFixed(1)}  d ${(smp.z - smp.groundZ >= 0 ? "+" : "") + (smp.z - smp.groundZ).toFixed(1)}m`, 8, cv.height - 8);
+    ctx.textAlign = "right";
+    ctx.fillText(`${(sHover / 1000).toFixed(2)} km`, cv.width - 8, 14);
   }
 
   private showTooltip(state: AppState, sHover: number, px: number, py: number): void {
