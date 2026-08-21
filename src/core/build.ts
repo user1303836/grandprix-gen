@@ -20,7 +20,8 @@ import { kappaFromElements, totalTurning, morphElements, preCloseElements } from
 import { detectCorners, findStartFinish, makeSectors } from "./corners";
 import { designVerticalProfile, designTerrainProfile, conformToTerrain } from "./vertical";
 import { designCharacter } from "./profiles";
-import { classifyStructures } from "./structures";
+import { Corridor } from "./corridor";
+import { defaultCivilControls, planCivil, rollCivilStyle, type CivilControls, type CivilPlan, type CivilStyle, type FeasibilityMode } from "./civil";
 import { Rng } from "./prng";
 import {
   GENERATOR_VERSION,
@@ -189,13 +190,14 @@ export function buildTrack(
   let structures: Track["structures"] = [];
   let carveMask: Uint8Array | null = null;
   let carveInner: Float32Array | null = null;
+  let civil: CivilPlan | null = null;
   if (opts.terrainSampler) {
     const tol = params.earthworkTolerance;
     const cut = Math.max(0.5, params.maxCut * (0.25 + 0.75 * tol)) + 2.5; // feature headroom
     const fill = Math.max(0.5, params.maxFill * (0.25 + 0.75 * tol));
     z = conformToTerrain(z, groundZ, ds, params.maxGrade, cut, fill);
 
-    // offset ground for cut-side detection (left/right of the corridor)
+    // offset ground for banking-into-hill (left/right of the corridor)
     const gL = new Float64Array(n);
     const gR = new Float64Array(n);
     for (let i = 0; i < n; i++) {
@@ -206,47 +208,48 @@ export function buildTrack(
       gL[i] = opts.terrainSampler(uni.x[i] + nx * off, uni.y[i] + ny * off);
       gR[i] = opts.terrainSampler(uni.x[i] - nx * off, uni.y[i] - ny * off);
     }
-    const halfW = new Float32Array(n);
-    for (let i = 0; i < n; i++) halfW[i] = Math.max(props.widthL[i], props.widthR[i]);
-    const st = classifyStructures({
-      seed,
-      z,
-      groundZ,
-      ds,
-      halfWidth: halfW,
-      groundLeft: gL,
-      groundRight: gR,
-    });
-    structures = st.spans;
-    carveMask = st.carveMask;
-    // narrow bench carving inside cuts so the hill closes in at the walls;
-    // wide gentle aprons elsewhere
-    carveInner = new Float32Array(n).fill(40);
-    for (const sp of structures) {
-      if (sp.kind !== "retaining" && sp.kind !== "rock-cut") continue;
-      const pad = Math.round(30 / ds);
-      const i0 = Math.round(sp.sStart / ds) % n;
-      const i1 = Math.round(sp.sEnd / ds) % n;
-      const spanLen = ((i1 - i0 + n) % n) || n;
-      for (let k = -pad; k < spanLen + pad; k++) {
-        const i = (i0 + k + n) % n;
-        carveInner[i] = Math.min(carveInner[i], halfW[i] + 7);
-      }
-    }
 
-    // conform to the hillside: on cross-slopes the road banks gently INTO
-    // the hill (like real mountain roads), scaled by terrain coupling
-    const coupling = character.identity.terrainCoupling;
-    if (coupling > 0.05) {
+    // conform to the hillside FIRST so the corridor sees final banking
+    const coupling0 = character.identity.terrainCoupling;
+    if (coupling0 > 0.05) {
       for (let i = 0; i < n; i++) {
         const off = (props.widthL[i] + props.widthR[i]) / 2 + 9;
         if (!Number.isFinite(gL[i]) || !Number.isFinite(gR[i])) continue;
         const cross = (gL[i] - gR[i]) / (2 * off); // + = ground higher left
-        bank[i] += Math.max(-0.05, Math.min(0.05, cross * 0.55)) * coupling;
+        bank[i] += Math.max(-0.05, Math.min(0.05, cross * 0.55)) * coupling0;
       }
       const smoothed = smoothCircular(bank, Math.max(1, 14 / ds));
       bank.set(smoothed);
     }
+
+    // ---- civil engineering: corridor + structure planner ----------------
+    const shimSamples = new Array(n);
+    for (let i = 0; i < n; i++) {
+      shimSamples[i] = { x: uni.x[i], y: uni.y[i], z: z[i], heading: heading[i], kappa: kappa[i], bank: bank[i] };
+    }
+    const shim = { samples: shimSamples, props, ds, length: uni.length } as unknown as Track;
+    const corridor = new Corridor(shim);
+    const controls = civilControlsFromParams(params, seed);
+    civil = planCivil(shim, corridor, opts.terrainSampler, controls, seed);
+    structures = civilSpansToLegacy(civil.spans);
+    carveMask = new Uint8Array(n).fill(1);
+    carveInner = new Float32Array(n).fill(40);
+    for (const sp of civil.spans) {
+      const i0 = Math.round(sp.sStart / ds) % n;
+      const i1 = Math.round(sp.sEnd / ds) % n;
+      const spanLen = ((i1 - i0 + n) % n) || n;
+      const elevated = sp.kind === "viaduct" || sp.kind === "short-bridge" || sp.kind === "platform" || sp.kind === "shelf";
+      const covered = sp.kind === "tunnel" || sp.kind === "gallery";
+      const pad = Math.round(20 / ds);
+      for (let k = -pad; k < spanLen + pad; k++) {
+        const i = (i0 + k + n) % n;
+        if (elevated || covered) carveMask[i] = 0;
+        else if (sp.kind === "open-cut" || sp.kind === "retaining" || sp.kind === "dual-retaining" || sp.kind === "bench") {
+          carveInner[i] = Math.min(carveInner[i], Math.max(props.widthL[i], props.widthR[i]) + 7);
+        }
+      }
+    }
+
   }
 
   // assemble samples
@@ -286,6 +289,7 @@ export function buildTrack(
     structures,
     carveMask,
     carveInner,
+    civil,
   };
   return { track, closureError: repaired.closureError };
 }
@@ -367,6 +371,59 @@ export function applyDeform(x: Float64Array, y: Float64Array, deform: DeformStat
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/** Build CivilControls from params (auto pieces are seeded). */
+function civilControlsFromParams(params: TrackParams, seed: number): CivilControls {
+  const rolled = rollCivilStyle(seed, params.heritage ?? 0.4);
+  const style: CivilStyle = params.civilStyle && params.civilStyle !== "auto" ? (params.civilStyle as CivilStyle) : rolled.style;
+  const base = defaultCivilControls(style, params.civilBudget >= 0 ? params.civilBudget : rolled.budget);
+  base.feasibility = (
+    params.civilFeasibility && params.civilFeasibility !== "auto"
+      ? params.civilFeasibility
+      : style === "megaproject"
+        ? "megaproject"
+        : "realistic"
+  ) as FeasibilityMode;
+  base.reshape = params.earthworkTolerance;
+  base.viaductBias = params.viaductPref ?? 0;
+  base.platformBias = params.platformPref ?? 0;
+  base.tunnelBias = params.tunnelPref ?? 0;
+  base.runoffStandard = params.runoffStandard >= 0 ? params.runoffStandard : 0.5;
+  return base;
+}
+
+/** Legacy StructureSpan mapping for older consumers (barriers/mesh/debug). */
+function civilSpansToLegacy(spans: import("./civil").CivilSpan[]): import("./structures").StructureSpan[] {
+  const map: Record<string, import("./structures").StructureKind> = {
+    viaduct: "bridge",
+    "short-bridge": "bridge",
+    tunnel: "tunnel",
+    gallery: "tunnel",
+    retaining: "retaining",
+    "dual-retaining": "retaining",
+    "open-cut": "rock-cut",
+    bench: "retaining",
+    platform: "bridge",
+    shelf: "bridge",
+    embankment: "embankment",
+    terraced: "embankment",
+  };
+  const out: import("./structures").StructureSpan[] = [];
+  for (const sp of spans) {
+    const kind = map[sp.kind];
+    if (!kind) continue;
+    out.push({
+      kind,
+      sStart: sp.sStart,
+      sEnd: sp.sEnd,
+      minD: -sp.maxCut,
+      maxD: sp.maxFill,
+      side: sp.side === 0 ? "both" : sp.side > 0 ? "left" : "right",
+      seed: sp.seed,
+    });
+  }
+  return out;
+}
 
 function rotateInPlace(arr: Float64Array, rot: number): void {
   const n = arr.length;

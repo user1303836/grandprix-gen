@@ -22,7 +22,7 @@ export class SpraySystem {
   private head = 0;
 
   constructor() {
-    this.pos = new Float32Array(MAX * 3).fill(NaN);
+    this.pos = new Float32Array(MAX * 3).fill(-10000);
     this.vel = new Float32Array(MAX * 3);
     this.age = new Float32Array(MAX).fill(1e9);
     const geo = new BufferGeometry();
@@ -65,7 +65,7 @@ export class SpraySystem {
       this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
       this.vel[i * 3 + 1] -= 4.5 * dt; // droplets fall back
       if (this.age[i] > 1.4) {
-        this.pos[i * 3 + 1] = NaN; // retire offscreen
+        this.pos[i * 3 + 1] = -10000; // retired below the world (never NaN)
       }
     }
     attr.needsUpdate = true;

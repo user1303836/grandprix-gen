@@ -8,6 +8,8 @@
  */
 
 import type { Track } from "../core/types";
+import { makeTrackProximity } from "../core/terrain";
+import { Rng } from "../core/prng";
 
 export interface StructureMeshPart {
   name: string; // e.g. "bridge-deck", "pier", "tunnel", "portal", "retaining", "rock", "embankment"
@@ -91,10 +93,31 @@ function smoothLine(vals: number[], win: number): number[] {
 
 export function buildStructureMeshes(
   track: Track,
-  groundSampler: ((x: number, y: number) => number) | null,
+  groundSampler: ((x: number, y: number) => number | null) | null,
 ): StructureMeshPart[] {
-  const spans = track.structures ?? [];
-  if (spans.length === 0) return [];
+  const civilSpans = track.civil?.spans ?? [];
+  const legacySpans = track.structures ?? [];
+  if (civilSpans.length === 0 && legacySpans.length === 0) return [];
+  // normalized span shape: both stat fields and side conventions present
+  const spans = civilSpans.length > 0
+    ? civilSpans.map((c) => ({
+        ...c,
+        kind: c.kind as string,
+        sideNum: c.side,
+        sideStr: c.side > 0 ? ("left" as const) : c.side < 0 ? ("right" as const) : ("both" as const),
+        minD: -c.maxCut,
+        maxD: c.maxFill,
+      }))
+    : legacySpans.map((l) => ({
+        ...l,
+        kind: l.kind as string,
+        sideNum: l.side === "left" ? 1 : l.side === "right" ? -1 : 0,
+        sideStr: l.side,
+        maxFill: Math.max(0, l.maxD),
+        maxCut: Math.max(0, -l.minD),
+        maxHeight: Math.max(0, l.maxD),
+        side: l.side === "left" ? 1 : l.side === "right" ? -1 : 0,
+      }));
   const n = track.samples.length;
   const ds = track.ds;
   const props = track.props;
@@ -116,7 +139,7 @@ export function buildStructureMeshes(
   const groundAt = (x: number, y: number, fallback: number): number => {
     if (!groundSampler) return fallback;
     const g = groundSampler(x, y);
-    return Number.isFinite(g) ? g : fallback;
+    return g !== null && Number.isFinite(g) ? g : fallback;
   };
 
   const bridgeDeck = new GeoAcc();
@@ -134,7 +157,23 @@ export function buildStructureMeshes(
     const idxs: number[] = [];
     for (let k = 0; k <= len; k++) idxs.push(i0 + k);
 
-    if (sp.kind === "bridge") {
+    if (sp.kind === "viaduct" || sp.kind === "short-bridge" || sp.kind === "bridge") {
+      buildElevated(sp, idxs, {
+        frameAt, groundAt, deck: bridgeDeck, sup: piers,
+      }, track, props, groundSampler);
+    } else if (sp.kind === "platform") {
+      buildPlatform(sp, idxs, { frameAt, groundAt, acc: piers }, track, props, groundSampler);
+    } else if (sp.kind === "shelf") {
+      buildShelf({ ...sp, side: sp.sideNum || 1 }, idxs, { frameAt, groundAt, acc: piers, deck: bridgeDeck }, track, props, groundSampler);
+    } else if (sp.kind === "terraced") {
+      buildTerraced(sp, idxs, { frameAt, groundAt, acc: embank }, track, props, groundSampler);
+    } else if (sp.kind === "gallery") {
+      buildGallery({ ...sp, side: sp.sideNum || 1 }, idxs, { frameAt, groundAt, tunnel, portals, retaining }, track, props, groundSampler);
+    } else if (sp.kind === "bench") {
+      buildBench({ ...sp, side: sp.sideNum || 1 }, idxs, { frameAt, groundAt, retaining, embank }, track, props, groundSampler);
+    } else if (sp.kind === "dual-retaining") {
+      buildRetainingLegacy({ ...sp, side: sp.sideStr }, idxs, { frameAt, groundAt, acc: retaining }, "both");
+    } else if (sp.kind === "bridge-disabled") {
       // deck edge beams + parapets, piers every ~32 m
       const step = 2; // samples per quad segment
       for (let k = 0; k < idxs.length - step; k += step) {
@@ -257,7 +296,7 @@ export function buildStructureMeshes(
       }
     } else if (sp.kind === "retaining" || sp.kind === "rock-cut") {
       const acc = sp.kind === "retaining" ? retaining : rock;
-      const sides: (-1 | 1)[] = sp.side === "both" ? [-1, 1] : sp.side === "left" ? [-1] : [1];
+      const sides: (-1 | 1)[] = sp.sideStr === "both" ? [-1, 1] : sp.sideStr === "left" ? [-1] : [1];
       for (const side of sides) {
         // sample the wall line densely, then SMOOTH the crest so the wall
         // top follows the hillside without sawteeth
@@ -345,6 +384,393 @@ export function buildStructureMeshes(
   if (rock.idx.length) out.push(rock.finish("rock"));
   if (embank.idx.length) out.push(embank.finish("embankment"));
   return out;
+}
+
+
+// ---------------------------------------------------------------------------
+// civil-kind builders
+// ---------------------------------------------------------------------------
+
+interface BuildCtx {
+  frameAt: (i: number) => Frame;
+  groundAt: (x: number, y: number, fallback: number) => number;
+  deck?: GeoAcc;
+  sup?: GeoAcc;
+  acc?: GeoAcc;
+  tunnel?: GeoAcc;
+  portals?: GeoAcc;
+  retaining?: GeoAcc;
+  embank?: GeoAcc;
+}
+
+/** Terrain-aware support planner for elevated spans. */
+function planSupports(
+  idxs: number[],
+  ctx: BuildCtx,
+  track: Track,
+  ds: number,
+  groundSampler: ((x: number, y: number) => number | null) | null,
+): { i: number; x: number; y: number; z: number; ground: number; portal: boolean }[] {
+  const n = track.samples.length;
+  const lenM = idxs.length * ds;
+  // proximity index over ALL track samples for lower-corridor clearance
+  const prox = makeTrackProximity(track.samples.map((p) => ({ x: p.x, y: p.y, z: p.z })));
+  const spanS = idxs[0] * ds;
+  const conflictAt = (x: number, y: number, zDeck: number, selfI: number): boolean => {
+    const near = prox.within(x, y, 40);
+    for (const c of near) {
+      const ii = c.i ?? 0;
+      // ignore the deck's own neighborhood
+      if (Math.abs(ii - selfI) * ds < 30) continue;
+      const lowerZ = c.z;
+      if (lowerZ < zDeck - 1.2) {
+        // a lower corridor passes beneath: conflict if within its platform
+        const halfW = Math.max(track.props.widthL[ii], track.props.widthR[ii]) + 4.5;
+        if (c.d < halfW) return true;
+      }
+    }
+    return false;
+  };
+  // span target grows with height: 26 m .. 64 m, seeded variation
+  const rng = new Rng(track.seed ^ 0x5a1);
+  const supports: { i: number; x: number; y: number; z: number; ground: number; portal: boolean }[] = [];
+  let k = 0;
+  while (k < idxs.length - 1) {
+    const f = ctx.frameAt(idxs[k]);
+    const g0 = ctx.groundAt(f.x, f.y, f.z - 30);
+    const h = f.z - g0;
+    const target = Math.max(24, Math.min(64, 26 + h * 0.85)) * rng.range(0.85, 1.15);
+    let step = Math.max(8, Math.round(target / ds));
+    if (k + step >= idxs.length - 1) step = idxs.length - 1 - k;
+    if (step < 6) break;
+    // local search: prefer the highest valid ground within +-35% of the step
+    const lo = Math.max(5, Math.round(step * 0.65));
+    const hi = Math.min(idxs.length - 1 - k, Math.round(step * 1.35));
+    let bestK = -1;
+    let bestGround = -Infinity;
+    for (let dk = lo; dk <= hi; dk += 2) {
+      const f2 = ctx.frameAt(idxs[k + dk]);
+      const g2 = ctx.groundAt(f2.x, f2.y, f2.z - 30);
+      if (!Number.isFinite(g2)) continue;
+      if (conflictAt(f2.x, f2.y, f2.z, idxs[k + dk])) continue;
+      if (g2 > bestGround) {
+        bestGround = g2;
+        bestK = k + dk;
+      }
+    }
+    if (bestK < 0) {
+      // no clean footing: lengthen the span past the obstruction
+      k += hi;
+      continue;
+    }
+    const f3 = ctx.frameAt(idxs[bestK]);
+    supports.push({ i: idxs[bestK], x: f3.x, y: f3.y, z: f3.z, ground: bestGround, portal: false });
+    k = bestK;
+  }
+  void spanS;
+  void lenM;
+  void n;
+  return supports;
+}
+
+/** Viaduct / short-bridge: planned supports, tapered piers, hammerhead caps. */
+function buildElevated(
+  sp: { sStart: number; sEnd: number; seed: number },
+  idxs: number[],
+  ctx: BuildCtx,
+  track: Track,
+  props: Track["props"],
+  groundSampler: ((x: number, y: number) => number | null) | null,
+): void {
+  const deck = ctx.deck!;
+  const sup = ctx.sup!;
+  const ds = track.ds;
+  const step = 2;
+  // box-girder edge beams + soffit slab
+  for (let k = 0; k < idxs.length - step; k += step) {
+    const a = ctx.frameAt(idxs[k]);
+    const b = ctx.frameAt(idxs[k + step]);
+    for (const side of [-1, 1] as const) {
+      const wa = side < 0 ? a.wL : a.wR;
+      const wb = side < 0 ? b.wL : b.wR;
+      const ax = a.x + a.nx * wa * side;
+      const ay = a.y + a.ny * wa * side;
+      const bx = b.x + b.nx * wb * side;
+      const by = b.y + b.ny * wb * side;
+      deck.quad([ax, ay, a.z - 1.5], [bx, by, b.z - 1.5], [bx, by, b.z + 1.0], [ax, ay, a.z + 1.0]);
+    }
+    deck.quad(
+      [a.x + a.nx * a.wL, a.y + a.ny * a.wL, a.z - 1.45],
+      [b.x + b.nx * b.wL, b.y + b.ny * b.wL, b.z - 1.45],
+      [b.x - b.nx * b.wR, b.y - b.ny * b.wR, b.z - 1.45],
+      [a.x - a.nx * a.wR, a.y - a.ny * a.wR, a.z - 1.45],
+    );
+  }
+  // abutments at both ends
+  for (const endIdx of [idxs[0], idxs[idxs.length - 1]]) {
+    const f = ctx.frameAt(endIdx);
+    const g = ctx.groundAt(f.x, f.y, f.z - 4);
+    const h = f.z - g + 1.5;
+    if (h > 1.5) {
+      sup.box(f.x, f.y, g - 1 + h / 2, f.wL + f.wR + 3, 3.2, h, f.heading + Math.PI / 2);
+    }
+  }
+  // planned supports
+  const supports = planSupports(idxs, ctx, track, ds, groundSampler);
+  for (const s of supports) {
+    const f = ctx.frameAt(s.i);
+    const top = f.z - 1.4;
+    const base = s.ground - 1.2;
+    const h = top - base;
+    if (h < 2.5) continue;
+    // tapered pier: wider at the footing... visually: shaft + hammerhead cap
+    const shaftW = Math.min(3.4, 1.7 + h * 0.02);
+    sup.box(s.x, s.y, base + h / 2, shaftW + h * 0.012, 1.8, h, f.heading); // tapered shaft
+    sup.box(s.x, s.y, top + 0.35, Math.min(f.wL + f.wR + 2.5, 18), 2.4, 0.8, f.heading + Math.PI / 2); // hammerhead
+  }
+}
+
+/** Broad concrete platform supporting the FULL corridor (runoff included). */
+function buildPlatform(
+  sp: { sStart: number; sEnd: number },
+  idxs: number[],
+  ctx: BuildCtx,
+  track: Track,
+  props: Track["props"],
+  groundSampler: ((x: number, y: number) => number | null) | null,
+): void {
+  const acc = ctx.acc!;
+  const step = 2;
+  // deck slab across the full platform width + stepped side walls to ground
+  for (let k = 0; k < idxs.length - step; k += step) {
+    const a = ctx.frameAt(idxs[k]);
+    const b = ctx.frameAt(idxs[k + step]);
+    const wLa = a.wL + props.runoffWidthL[idxs[k] % track.samples.length] * 0.9;
+    const wRa = a.wR + props.runoffWidthR[idxs[k] % track.samples.length] * 0.9;
+    const wLb = b.wL + props.runoffWidthL[idxs[k + step] % track.samples.length] * 0.9;
+    const wRb = b.wR + props.runoffWidthR[idxs[k + step] % track.samples.length] * 0.9;
+    // top slab
+    acc.quad(
+      [a.x + a.nx * wLa, a.y + a.ny * wLa, a.z - 0.35],
+      [b.x + b.nx * wLb, b.y + b.ny * wLb, b.z - 0.35],
+      [b.x - b.nx * wRb, b.y - b.ny * wRb, b.z - 0.35],
+      [a.x - a.nx * wRa, a.y - a.ny * wRa, a.z - 0.35],
+    );
+    // side walls down to ground (both sides)
+    for (const side of [-1, 1] as const) {
+      const wa = side < 0 ? wLa : wRa;
+      const wb = side < 0 ? wLb : wRb;
+      const ax = a.x + a.nx * wa * side;
+      const ay = a.y + a.ny * wa * side;
+      const bx = b.x + b.nx * wb * side;
+      const by = b.y + b.ny * wb * side;
+      const gA = ctx.groundAt(ax, ay, a.z - 6) - 0.6;
+      const gB = ctx.groundAt(bx, by, b.z - 6) - 0.6;
+      acc.quad([ax, ay, gA], [bx, by, gB], [bx, by, b.z - 0.35], [ax, ay, a.z - 0.35]);
+    }
+  }
+}
+
+/** Hillside shelf: half-podium with posts on the downhill side. */
+function buildShelf(
+  sp: { sStart: number; sEnd: number; side: number },
+  idxs: number[],
+  ctx: BuildCtx,
+  track: Track,
+  props: Track["props"],
+  groundSampler: ((x: number, y: number) => number | null) | null,
+): void {
+  const acc = ctx.acc!;
+  const deck = ctx.deck!;
+  const step = 2;
+  const side = (sp.side || 1) as -1 | 1; // downhill side (fill side)
+  for (let k = 0; k < idxs.length - step; k += step) {
+    const a = ctx.frameAt(idxs[k]);
+    const b = ctx.frameAt(idxs[k + step]);
+    const wA = (side < 0 ? a.wL : a.wR) + 3.5;
+    const wB = (side < 0 ? b.wL : b.wR) + 3.5;
+    const ax = a.x + a.nx * wA * side;
+    const ay = a.y + a.ny * wA * side;
+    const bx = b.x + b.nx * wB * side;
+    const by = b.y + b.ny * wB * side;
+    // downhill face: slab edge + wall to ground
+    const gA = ctx.groundAt(ax, ay, a.z - 6) - 0.5;
+    const gB = ctx.groundAt(bx, by, b.z - 6) - 0.5;
+    acc.quad([ax, ay, gA], [bx, by, gB], [bx, by, b.z - 0.3], [ax, ay, a.z - 0.3]);
+    deck.quad(
+      [a.x, a.y, a.z - 0.3],
+      [b.x, b.y, b.z - 0.3],
+      [bx, by, b.z - 0.3],
+      [ax, ay, a.z - 0.3],
+    );
+  }
+  void props;
+  void groundSampler;
+}
+
+/** Terraced embankment: stepped grass benches down the fill slope. */
+function buildTerraced(
+  sp: { sStart: number; sEnd: number; maxFill: number },
+  idxs: number[],
+  ctx: BuildCtx,
+  track: Track,
+  props: Track["props"],
+  groundSampler: ((x: number, y: number) => number | null) | null,
+): void {
+  const acc = ctx.acc!;
+  const step = 2;
+  for (const side of [-1, 1] as const) {
+    for (let k = 0; k < idxs.length - step; k += step) {
+      const a = ctx.frameAt(idxs[k]);
+      const b = ctx.frameAt(idxs[k + step]);
+      const wa = (side < 0 ? a.wL : a.wR) + 3.5;
+      const wb = (side < 0 ? b.wL : b.wR) + 3.5;
+      const ax = a.x + a.nx * wa * side;
+      const ay = a.y + a.ny * wa * side;
+      const bx = b.x + b.nx * wb * side;
+      const by = b.y + b.ny * wb * side;
+      const gA = ctx.groundAt(ax, ay, a.z - sp.maxFill) - 0.3;
+      const gB = ctx.groundAt(bx, by, b.z - sp.maxFill) - 0.3;
+      // two terraces: mid bench + toe
+      const midA = (a.z + gA) / 2;
+      const midB = (b.z + gB) / 2;
+      const runOut = 2.2;
+      acc.quad([ax, ay, a.z - 0.15], [bx, by, b.z - 0.15], [bx + b.nx * runOut * side, by + b.ny * runOut * side, midB], [ax + a.nx * runOut * side, ay + a.ny * runOut * side, midA]);
+      const a2x = ax + a.nx * runOut * side;
+      const a2y = ay + a.ny * runOut * side;
+      const b2x = bx + b.nx * runOut * side;
+      const b2y = by + b.ny * runOut * side;
+      acc.quad([a2x, a2y, midA], [b2x, b2y, midB], [b2x + b.nx * runOut * side, b2y + b.ny * runOut * side, gB], [a2x + a.nx * runOut * side, a2y + a.ny * runOut * side, gA]);
+    }
+  }
+  void props;
+  void groundSampler;
+}
+
+/** Gallery (half-tunnel): uphill wall + roof slab + downhill posts/parapet. */
+function buildGallery(
+  sp: { sStart: number; sEnd: number; side: number },
+  idxs: number[],
+  ctx: BuildCtx,
+  track: Track,
+  props: Track["props"],
+  groundSampler: ((x: number, y: number) => number | null) | null,
+): void {
+  const tunnel = ctx.tunnel!;
+  const retaining = ctx.retaining!;
+  const uphill = (sp.side || 1) as -1 | 1;
+  const step = 2;
+  for (let k = 0; k < idxs.length - step; k += step) {
+    const a = ctx.frameAt(idxs[k]);
+    const b = ctx.frameAt(idxs[k + step]);
+    const wA = (uphill > 0 ? a.wL : a.wR) + 2.2;
+    const wB = (uphill > 0 ? b.wL : b.wR) + 2.2;
+    // uphill wall
+    const ax = a.x + a.nx * wA * uphill;
+    const ay = a.y + a.ny * wA * uphill;
+    const bx = b.x + b.nx * wB * uphill;
+    const by = b.y + b.ny * wB * uphill;
+    retaining.quad([ax, ay, a.z - 0.5], [bx, by, b.z - 0.5], [bx, by, b.z + 6.4], [ax, ay, a.z + 6.4]);
+    // roof slab from the uphill wall across to the downhill edge
+    const wAo = (uphill > 0 ? a.wR : a.wL) + 1.2;
+    const wBo = (uphill > 0 ? b.wR : b.wL) + 1.2;
+    const axo = a.x - a.nx * wAo * uphill;
+    const ayo = a.y - a.ny * wAo * uphill;
+    const bxo = b.x - b.nx * wBo * uphill;
+    const byo = b.y - b.ny * wBo * uphill;
+    tunnel.quad([ax, ay, a.z + 6.4], [bx, by, b.z + 6.4], [bxo, byo, b.z + 6.4], [axo, ayo, a.z + 6.4]);
+    // downhill posts + parapet every ~9 m
+    if (k % 9 === 0) {
+      const gA = ctx.groundAt(axo, ayo, a.z - 8);
+      if (a.z + 6.4 - gA > 2) {
+        retaining.quad(
+          [axo - 0.35, ayo, gA - 0.5],
+          [axo + 0.35, ayo, gA - 0.5],
+          [axo + 0.35, ayo, a.z + 6.4],
+          [axo - 0.35, ayo, a.z + 6.4],
+        );
+      }
+    }
+  }
+  void props;
+  void groundSampler;
+}
+
+/** Bench: open cut face uphill + low toe wall downhill. */
+function buildBench(
+  sp: { sStart: number; sEnd: number; side: number },
+  idxs: number[],
+  ctx: BuildCtx,
+  track: Track,
+  props: Track["props"],
+  groundSampler: ((x: number, y: number) => number | null) | null,
+): void {
+  const retaining = ctx.retaining!;
+  const uphill = (sp.side || 1) as -1 | 1;
+  const down = -uphill as -1 | 1;
+  const step = 2;
+  for (let k = 0; k < idxs.length - step; k += step) {
+    const a = ctx.frameAt(idxs[k]);
+    const b = ctx.frameAt(idxs[k + step]);
+    // uphill cut face (rocky)
+    const wAu = (uphill > 0 ? a.wL : a.wR) + 2.4;
+    const wBu = (uphill > 0 ? b.wL : b.wR) + 2.4;
+    const axu = a.x + a.nx * wAu * uphill;
+    const ayu = a.y + a.ny * wAu * uphill;
+    const bxu = b.x + b.nx * wBu * uphill;
+    const byu = b.y + b.ny * wBu * uphill;
+    const gA = ctx.groundAt(axu + a.nx * 3 * uphill, ayu + a.ny * 3 * uphill, a.z - 4);
+    const gB = ctx.groundAt(bxu + b.nx * 3 * uphill, byu + b.ny * 3 * uphill, b.z - 4);
+    const topA = Math.max(gA + 0.6, a.z + 1.1);
+    const topB = Math.max(gB + 0.6, b.z + 1.1);
+    retaining.quad([axu, ayu, a.z - 0.5], [bxu, byu, b.z - 0.5], [bxu, byu, topB], [axu, ayu, topA]);
+    // low toe wall downhill
+    const wAd = (down > 0 ? a.wL : a.wR) + 2.6;
+    const wBd = (down > 0 ? b.wL : b.wR) + 2.6;
+    const axd = a.x + a.nx * wAd * down;
+    const ayd = a.y + a.ny * wAd * down;
+    const bxd = b.x + b.nx * wBd * down;
+    const byd = b.y + b.ny * wBd * down;
+    retaining.quad([axd, ayd, a.z - 1.6], [bxd, byd, b.z - 1.6], [bxd, byd, b.z + 0.5], [axd, ayd, a.z + 0.5]);
+  }
+  void props;
+  void groundSampler;
+}
+
+/** Legacy retaining wall builder (used for dual-retaining). */
+function buildRetainingLegacy(
+  sp: { sStart: number; sEnd: number; side: string },
+  idxs: number[],
+  ctx: BuildCtx,
+  sideOverride: "both" | "left" | "right",
+): void {
+  const acc = ctx.acc ?? ctx.retaining!;
+  const side = sp.side === "both" ? "both" : sp.side;
+  const sides: (-1 | 1)[] = sideOverride === "both" || side === "both" ? [-1, 1] : side === "left" ? [-1] : [1];
+  for (const side2 of sides) {
+    const line: { x: number; y: number; z: number; top: number }[] = [];
+    for (let k = 0; k < idxs.length; k++) {
+      const a = ctx.frameAt(idxs[k]);
+      const w = (side2 < 0 ? a.wL : a.wR) + 2.2;
+      const x = a.x + a.nx * w * side2;
+      const y = a.y + a.ny * w * side2;
+      const g = ctx.groundAt(x + a.nx * 3 * side2, y + a.ny * 3 * side2, a.z + 3);
+      line.push({ x, y, z: a.z - 0.6, top: Math.max(g + 0.7, a.z + 1.2) });
+    }
+    const sm = smoothLine(line.map((p) => p.top), 4);
+    for (let k = 0; k < line.length - 1; k++) {
+      const a = line[k];
+      const b = line[k + 1];
+      acc.quad([a.x, a.y, a.z], [b.x, b.y, b.z], [b.x, b.y, sm[k + 1]], [a.x, a.y, sm[k]]);
+      const fA = ctx.frameAt(idxs[k]);
+      acc.quad(
+        [a.x, a.y, sm[k]],
+        [b.x, b.y, sm[k + 1]],
+        [b.x + -Math.sin(fA.heading) * 0.6 * side2, b.y + Math.cos(fA.heading) * 0.6 * side2, sm[k + 1]],
+        [a.x + -Math.sin(fA.heading) * 0.6 * side2, a.y + Math.cos(fA.heading) * 0.6 * side2, sm[k]],
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

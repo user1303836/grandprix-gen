@@ -134,7 +134,7 @@ export interface TrackProximity {
     x: number,
     y: number,
     maxDist: number,
-  ): { d: number; z: number; inner?: number; outer?: number }[];
+  ): { d: number; z: number; inner?: number; outer?: number; i?: number }[];
 }
 
 /** Spatial-hash proximity index over track samples. */
@@ -154,7 +154,7 @@ export function makeTrackProximity(
     const bx = Math.floor(x / bucketSize);
     const by = Math.floor(y / bucketSize);
     const r = Math.ceil(maxDist / bucketSize);
-    const out: { d: number; z: number; inner?: number; outer?: number }[] = [];
+    const out: { d: number; z: number; inner?: number; outer?: number; i?: number }[] = [];
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         const arr = buckets.get(`${bx + dx},${by + dy}`);
@@ -162,7 +162,7 @@ export function makeTrackProximity(
         for (const i of arr) {
           const p = trackSamples[i];
           const d = Math.hypot(p.x - x, p.y - y);
-          if (d <= maxDist) out.push({ d, z: p.z, inner: p.inner, outer: p.outer });
+          if (d <= maxDist) out.push({ d, z: p.z, inner: p.inner, outer: p.outer, i });
         }
       }
     }

@@ -179,7 +179,12 @@ export function generateTerrainTrack(
       hd[i] = r.track.samples[i].heading;
     }
     const cost = terrainCost(xs, ys, hd, grid, params, opts.avoidBuildings);
-    const score = cost + (r.attempts - 1) * 0.35; // prefer easy validity too
+    // the civil plan (computed during build) is part of the score:
+    // feasible, cheap engineering wins; infeasible alignments are heavily
+    // penalized so the search effectively REROUTES toward buildable ground
+    const civil = r.track.civil;
+    const civilScore = civil ? civil.cost * 0.004 + (civil.feasible ? 0 : 2500) : 0;
+    const score = cost + civilScore + (r.attempts - 1) * 0.35; // prefer easy validity too
     if (!best || score < (best.terrainCost ?? Infinity)) {
       best = { ...r, terrainCost: score };
     }

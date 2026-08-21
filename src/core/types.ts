@@ -84,6 +84,14 @@ export interface TrackParams {
   maxFill: number;
   /** Preference for contour following vs straight-line grades. */
   contourFollowing: number;
+  /** Civil engineering: style (auto = seeded), budget, feasibility. */
+  civilStyle: string; // "auto" | terrain-following | heritage | mountain-club | modern | viaduct-heavy | megaproject
+  civilBudget: number; // -1 = auto (from style)
+  civilFeasibility: string; // "auto" | realistic | permissive | megaproject
+  viaductPref: number; // -1..1
+  platformPref: number; // -1..1
+  tunnelPref: number; // -1..1
+  runoffStandard: number; // -1 = auto
   ridgePreference: number;
   valleyPreference: number;
 
@@ -126,6 +134,13 @@ export function defaultParams(): TrackParams {
     maxCut: 18,
     maxFill: 14,
     contourFollowing: 0.5,
+    civilStyle: "auto",
+    civilBudget: -1,
+    civilFeasibility: "auto",
+    viaductPref: 0,
+    platformPref: 0,
+    tunnelPref: 0,
+    runoffStandard: -1,
     ridgePreference: 0.3,
     valleyPreference: 0.3,
 
@@ -351,12 +366,14 @@ export interface Track {
   features: TrackFeature[];
   /** Per-sample physical property profiles. */
   props: PropertyProfiles;
-  /** Civil structures where the road deviates from the ground (terrain mode). */
+  /** Legacy structure spans (derived from the civil plan for older consumers). */
   structures: import("./structures").StructureSpan[];
   /** 1 = terrain may be carved toward the road at this sample; 0 = structure owns the gap. */
   carveMask: Uint8Array | null;
   /** Per-sample flat carve half-width (narrow benches in cuts). */
   carveInner: Float32Array | null;
+  /** The civil plan (structure spans + analysis). Terrain mode only. */
+  civil: import("./civil").CivilPlan | null;
   /** Sector-scale character zones (old/modern/mountain/... kilometer axis). */
   zones: import("./character").CircuitZone[];
 }

@@ -139,7 +139,10 @@ export function runSearch(job: SearchJob): SearchOut {
             ys[i] = track.samples[i].y;
             hd[i] = track.samples[i].heading;
           }
-          return terrainCost(xs, ys, hd, grid, job.params, job.avoidBuildings ?? null);
+          let c = terrainCost(xs, ys, hd, grid, job.params, job.avoidBuildings ?? null);
+          const civil = track.civil;
+          if (civil) c += civil.cost * 0.004 + (civil.feasible ? 0 : 2500);
+          return c;
         }
       : undefined,
     costWeight: 9,
