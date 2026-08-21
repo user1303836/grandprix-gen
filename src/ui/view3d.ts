@@ -55,6 +55,12 @@ import { RainSystem } from "./rain";
 import {
   ACESFilmicToneMapping,
   Vector2 as Vec2,
+  PMREMGenerator,
+  Color as ThreeColor,
+  DataTexture,
+  RGBAFormat,
+  FloatType,
+  EquirectangularReflectionMapping,
 } from "three";
 import {
   buildGridMesh,
@@ -432,6 +438,8 @@ export class View3D {
         const water = buildGridMesh(() => Math.max(0.25, minZ + 0.1), -extent, -extent, extent, extent, 2, 2);
         const wm = this.gridMesh(water.positions, water.indices, 0x2b4a63, true);
         wm.material = makeWaterMaterial(this.sunDirection());
+        (wm.material as ShaderMaterial).uniforms.shallow.value.setHex(SKY_STYLES[this.dayTime].horizon);
+        (wm.material as ShaderMaterial).uniforms.sunColor.value.setHex(SKY_STYLES[this.dayTime].sunColor);
         this.trackGroup.add(wm);
       }
       // drifting cloud shadows over the whole site
@@ -445,6 +453,7 @@ export class View3D {
       );
       this.trackGroup.add(this.cloudShadows.mesh);
       this.addTrees(state.terrain, track);
+      this.addGrassTufts(state.terrain, track);
       if (state.buildings && state.buildings.length > 0) {
         // seat buildings on the CARVED terrain so they don't float/sink
         // where the corridor flattens the ground
@@ -483,6 +492,14 @@ export class View3D {
     this.scene.fog = new Fog(preset.fogColor, span * preset.fogNearK, span * preset.fogFarK);
 
     this.scene.add(this.trackGroup);
+    // match env intensity to the weather
+    const wet = this.weather === "rain";
+    const intensity = wet ? 0.85 : 0.38;
+    this.trackGroup.traverse((o) => {
+      if (o instanceof Mesh && o.material instanceof MeshStandardMaterial) {
+        o.material.envMapIntensity = intensity;
+      }
+    });
   }
 
   private fitCamera(track: Track, terrain: TerrainGrid | null): void {
@@ -528,6 +545,55 @@ export class View3D {
   }
 
   // ---------------------------------------------------------- day time
+  private envTex: import("three").Texture | null = null;
+  private pmrem: PMREMGenerator | null = null;
+
+  /** Rebuild the scene environment map from the sky style (reflections). */
+  private updateEnvironment(): void {
+    if (!this.pmrem) this.pmrem = new PMREMGenerator(this.renderer);
+    const st = SKY_STYLES[this.dayTime];
+    const raining = this.weather === "rain";
+    const zen = new ThreeColor(raining ? 0x3a4450 : st.zenith);
+    const hor = new ThreeColor(raining ? 0x6a7480 : st.horizon);
+    const grd = new ThreeColor(raining ? 0x2a3038 : st.ground);
+    // 64x32 equirect gradient: zenith top, horizon middle, ground bottom
+    const w = 64;
+    const h = 32;
+    const data = new Float32Array(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      const t = y / (h - 1); // 0 top .. 1 bottom
+      for (let x = 0; x < w; x++) {
+        let c: ThreeColor;
+        if (t < 0.5) {
+          c = zen.clone().lerp(hor, t * 2);
+        } else {
+          c = hor.clone().lerp(grd, (t - 0.5) * 2);
+        }
+        const i = (y * w + x) * 4;
+        data[i] = c.r;
+        data[i + 1] = c.g;
+        data[i + 2] = c.b;
+        data[i + 3] = 1;
+      }
+    }
+    const tex = new DataTexture(data, w, h, RGBAFormat, FloatType);
+    tex.mapping = EquirectangularReflectionMapping;
+    tex.needsUpdate = true;
+    const rt = this.pmrem.fromEquirectangular(tex);
+    if (this.envTex) this.envTex.dispose();
+    this.envTex = rt.texture;
+    this.scene.environment = this.envTex;
+    // reflections: subtle on dry, present when wet
+    const wet = this.weather === "rain";
+    const intensity = wet ? 0.85 : 0.38;
+    this.scene.traverse((o) => {
+      if (o instanceof Mesh && o.material instanceof MeshStandardMaterial) {
+        o.material.envMapIntensity = intensity;
+      }
+    });
+    tex.dispose();
+  }
+
   private applyDayTime(): void {
     const p = SKY_PRESETS[this.dayTime];
     // sky dome style (rain overrides toward slate overcast)
@@ -555,6 +621,7 @@ export class View3D {
     this.bloomPass.threshold = this.dayTime === "night" ? 0.55 : 1.55;
     // floodlights (only sensible with a track)
     this.rebuildFloodlights();
+    this.updateEnvironment();
   }
 
   private sunDirection(): Vector3 {
@@ -1343,6 +1410,52 @@ export class View3D {
       // hide when it's right on top of the camera
       if (d < 55) mat.opacity = 0;
     }
+  }
+
+  /** Small instanced grass tufts hugging the corridor (close-up richness). */
+  private addGrassTufts(grid: TerrainGrid, track: Track): void {
+    const rng = new Rng(track.seed ^ 0x6a55);
+    const proximity = makeTrackProximity(track.samples);
+    const spots: Matrix4[] = [];
+    const stride = Math.max(1, Math.round(9 / track.ds));
+    const n = track.samples.length;
+    for (let i = 0; i < n && spots.length < 2600; i += stride) {
+      const smp = track.samples[i];
+      for (let k = 0; k < 3; k++) {
+        const side = rng.bool() ? 1 : -1;
+        const w = side > 0 ? track.props.widthL[i] : track.props.widthR[i];
+        const off = side * (w + 3.5 + rng.next() * 18);
+        const nx = -Math.sin(smp.heading);
+        const ny = Math.cos(smp.heading);
+        const x = smp.x + nx * off + rng.spread(3);
+        const y = smp.y + ny * off + rng.spread(3);
+        const z = grid.elevationAt(x, y);
+        if (!Number.isFinite(z)) continue;
+        const near = proximity.nearest(x, y, 6);
+        if (near && near.d < 5.5) continue; // never in the road
+        const sc = 0.5 + rng.next() * 0.9;
+        spots.push(
+          new Matrix4()
+            .makeRotationY(rng.range(0, Math.PI * 2))
+            .setPosition(x, z, -y)
+            .scale(new Vector3(sc, sc * (0.8 + rng.next() * 0.5), sc)),
+        );
+      }
+    }
+    if (spots.length === 0) return;
+    const tuftGeo = new ConeGeometry(0.55, 1.5, 4);
+    tuftGeo.translate(0, 0.7, 0);
+    const tuftMat = new MeshStandardMaterial({ color: 0x4a6a2e, roughness: 1 });
+    const inst = new InstancedMesh(tuftGeo, tuftMat, spots.length);
+    spots.forEach((m, i) => {
+      inst.setMatrixAt(i, m);
+      inst.setColorAt(i, new Color(0x4a6a2e).offsetHSL(rng.spread(0.03), 0, rng.spread(0.09)));
+    });
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    inst.castShadow = true;
+    inst.name = "grass-tufts";
+    this.trackGroup!.add(inst);
   }
 
   // ------------------------------------------------------------- tick
