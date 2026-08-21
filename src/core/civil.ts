@@ -931,3 +931,18 @@ export function defaultCivilControls(style: CivilStyle, budget: number): CivilCo
     runoffStandard: 0.5,
   };
 }
+
+/** Civil span kind at arc position s (wrap-aware); "at-grade" when none. */
+export function civilKindAt(spans: CivilSpan[], s: number, trackLength: number): CivilKind {
+  const sm = ((s % trackLength) + trackLength) % trackLength;
+  for (const sp of spans) {
+    const a = sp.sStart;
+    const b = sp.sEnd;
+    if (a <= b) {
+      if (sm >= a && sm < b) return sp.kind;
+    } else if (sm >= a || sm < b) {
+      return sp.kind;
+    }
+  }
+  return "at-grade";
+}

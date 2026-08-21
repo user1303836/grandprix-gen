@@ -18,6 +18,7 @@ import {
 } from "three";
 import type { Track } from "../core/types";
 import { FeatureColors } from "../core/character";
+import { civilKindAt } from "../core/civil";
 
 /** Shared wind time uniform (the view drives it every frame). */
 export const windUniform = { value: 0 };
@@ -164,6 +165,25 @@ function offsetOf(track: Track, i: number, side: number, extra: number): { nx: n
 }
 
 /** Build all furniture for the track. Returns a Group in three-space. */
+/** True when s sits on an at-grade / ground-touching span. */
+function onGround(track: Track, s: number): boolean {
+  if (!track.civil) return true;
+  const k = civilKindAt(track.civil.spans, s, track.length);
+  return !["short-bridge", "viaduct", "tunnel", "gallery"].includes(k);
+}
+
+/** Shift s to the nearest at-grade s (search outward; fallback: original). */
+function nearestGroundS(track: Track, s: number): number {
+  if (onGround(track, s)) return s;
+  for (let d = 20; d < track.length / 2; d += 20) {
+    const a = (s + d) % track.length;
+    const b = (s - d + track.length) % track.length;
+    if (onGround(track, a)) return a;
+    if (onGround(track, b)) return b;
+  }
+  return s;
+}
+
 export function buildFurniture(track: Track): Group {
   const group = new Group();
   const n = track.samples.length;
@@ -368,7 +388,7 @@ export function buildFurniture(track: Track): Group {
     seatTex.repeat.set(7, 1);
     const nStands = 2 + Math.floor(rnd() * 2);
     for (let k = 0; k < nStands; k++) {
-      const s = 40 + k * 55 + rnd() * 20;
+      const s = nearestGroundS(track, 40 + k * 55 + rnd() * 20);
       const i = Math.round(s / ds) % n;
       const smp = track.samples[i];
       const side = 1; // pit side (left)

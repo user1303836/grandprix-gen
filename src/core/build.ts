@@ -21,9 +21,9 @@ import { detectCorners, findStartFinish, makeSectors } from "./corners";
 import { designVerticalProfile, designTerrainProfile, conformToTerrain } from "./vertical";
 import { designCharacter } from "./profiles";
 import { Corridor } from "./corridor";
-import { RunoffKind } from "./character";
+import { RunoffKind, elementRangesFor } from "./character";
 import { summarizeViolations, validateCorridor } from "./corridorValidate";
-import { defaultCivilControls, planCivil, repairSpans, rollCivilStyle, type CivilControls, type CivilPlan, type CivilStyle, type FeasibilityMode } from "./civil";
+import { civilKindAt, defaultCivilControls, planCivil, repairSpans, rollCivilStyle, type CivilControls, type CivilPlan, type CivilStyle, type FeasibilityMode } from "./civil";
 import { Rng } from "./prng";
 import {
   GENERATOR_VERSION,
@@ -294,6 +294,34 @@ export function buildTrack(
           const scale = 0.7 + roStd * 0.9;
           props.runoffWidthL[i] = Math.max(1.4, props.runoffWidthL[i] * scale);
           props.runoffWidthR[i] = Math.max(1.4, props.runoffWidthR[i] * scale);
+        }
+      }
+    }
+    // keep the pit lane on the ground: relocate the feature when its
+    // element sits on a bridge/tunnel span
+    {
+      const pit = character.features.find((f) => f.kind === "pit-lane");
+      if (pit && civil) {
+        const totalLen = uni.length;
+        const ranges = elementRangesFor(elements, totalLen);
+        const straightLen = (idx: number): number => {
+          const e = elements[idx];
+          return e.type === "straight" ? e.length : 0;
+        };
+        const probe = (ranges[pit.elementIdx].s0 + ranges[pit.elementIdx].s1) / 2;
+        const elevated = ["short-bridge", "viaduct", "tunnel", "gallery"].includes(
+          civilKindAt(civil.spans, probe, totalLen),
+        );
+        if (elevated) {
+          const alt = elements.findIndex(
+            (e, idx) =>
+              e.type === "straight" &&
+              straightLen(idx) >= 320 &&
+              !["short-bridge", "viaduct", "tunnel", "gallery"].includes(
+                civilKindAt(civil!.spans, (ranges[idx].s0 + ranges[idx].s1) / 2, totalLen),
+              ),
+          );
+          if (alt >= 0 && alt !== pit.elementIdx) pit.elementIdx = alt;
         }
       }
     }
