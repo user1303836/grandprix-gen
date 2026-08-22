@@ -173,3 +173,50 @@ describe("facility planning", () => {
     expect(ws[1]).toBeGreaterThan(ws[0]);
   });
 });
+
+// ----------------------------------------------------- style regressions
+describe("deterministic visual-regression seeds (structural)", () => {
+  const cases: [string, Partial<FacilityControls>, (p: ReturnType<typeof planFacilities>) => void][] = [
+    ["Fuji-like modern linear", { style: "modern-linear", seed: 11, scale: 0.8, grandstandDensity: 0.8 }, (p) => {
+      expect(p.pitComplex!.garageBays.length).toBeGreaterThan(20);
+      expect(p.pitComplex!.volumes.some((v) => v.floors >= 2)).toBe(true);
+      expect(p.grandstands.length).toBeGreaterThan(0);
+    }],
+    ["Bahrain-like desert canopy", { style: "desert-canopy", seed: 22, scale: 0.7 }, (p) => {
+      expect(p.pitComplex!.canopy).toBeTruthy();
+      expect(p.lighting.anchors.length).toBeGreaterThan(8);
+    }],
+    ["historic low-rise", { style: "historic-low-rise", seed: 33, scale: 0.3 }, (p) => {
+      expect(p.pitComplex!.garageBays.length).toBeLessThanOrEqual(20);
+      expect(p.pitComplex!.volumes.filter((v) => v.kind === "garage-block").every((v) => v.floors <= 2)).toBe(true);
+    }],
+    ["compact private club", { style: "private-club", seed: 44, scale: 0.2, grandstandDensity: 0.1 }, (p) => {
+      expect(p.pitComplex!.garageBays.length).toBeLessThanOrEqual(18);
+      expect(p.grandstands.length).toBeLessThanOrEqual(2);
+    }],
+    ["temporary street", { style: "temporary-modular", seed: 55, scale: 0.6 }, (p) => {
+      expect(p.identity.permanence).toBe("temporary");
+      expect(p.foundations.every((f) => f.kind === "temporary-footings" || f.supports.length > 0)).toBe(true);
+    }],
+    ["large endurance complex", { style: "experimental", seed: 66, scale: 1, grandstandDensity: 1 }, (p) => {
+      expect(p.pitComplex!.garageBays.length).toBeGreaterThan(24);
+      expect(p.grandstands.length).toBeGreaterThan(1);
+    }],
+    ["mountain stepped", { style: "utilitarian", seed: 77, scale: 0.5 }, (p) => {
+      for (const f of p.foundations) expect(f.supports.length).toBeGreaterThan(3);
+    }],
+    ["night-ready modern", { style: "modern-linear", seed: 88, nightReadiness: 1 }, (p) => {
+      expect(p.lighting.anchors.length).toBeGreaterThan(20);
+      expect(p.lighting.realLightIndices.length).toBeGreaterThan(0);
+    }],
+  ];
+  for (const [name, c, check] of cases) {
+    it(name, () => {
+      const p = planFacilities(getTrack(), null, ctrl(c));
+      check(p);
+      // determinism per seed
+      const q = planFacilities(getTrack(), null, ctrl(c));
+      expect(JSON.stringify(p)).toBe(JSON.stringify(q));
+    });
+  }
+});

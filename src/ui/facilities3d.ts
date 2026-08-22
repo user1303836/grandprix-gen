@@ -226,6 +226,25 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: im
   if (plan.pitLane) {
     group.add(pitLaneMesh(plan.pitLane));
     group.add(pitWallGroup(plan.pitLane));
+    // pit-exit traffic light at the release line
+    {
+      const pl = plan.pitLane;
+      const cl = pl.centerline[Math.min(pl.centerline.length - 1, Math.round(pl.releaseS / 4))];
+      const pole = new Mesh(new CylinderGeometry(0.08, 0.08, 2.6, 6), CONCRETE_MAT);
+      pole.position.set(cl.x, cl.z + 1.3, -cl.y);
+      group.add(pole);
+      const box = new Mesh(new BoxGeometry(0.5, 1.0, 0.3), new MeshStandardMaterial({ color: 0x181c20 }));
+      box.position.set(cl.x, cl.z + 2.8, -cl.y);
+      group.add(box);
+      const red = new Mesh(new PlaneGeometry(0.28, 0.28), new MeshStandardMaterial({ color: 0x401010, emissive: 0xff2a22, emissiveIntensity: 0.8 }));
+      red.position.set(cl.x, cl.z + 3.05, -cl.y);
+      red.rotation.y = -cl.heading + Math.PI;
+      group.add(red);
+      const grn = new Mesh(new PlaneGeometry(0.28, 0.28), new MeshStandardMaterial({ color: 0x104010, emissive: 0x22dd44, emissiveIntensity: 0.15 }));
+      grn.position.set(cl.x, cl.z + 2.62, -cl.y);
+      grn.rotation.y = -cl.heading + Math.PI;
+      group.add(grn);
+    }
   }
   if (plan.pitComplex) {
     group.add(pitComplexMeshes(plan.pitComplex, track, { sStart: plan.site.sStart, side: plan.site.side }));
