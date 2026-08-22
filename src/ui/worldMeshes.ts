@@ -33,6 +33,7 @@ import { makeGrassTexture } from "./textures";
 import type { WorldPlan, Landmark, Biome } from "../core/world/types";
 import type { Track } from "../core/types";
 import { pointInPolygon } from "../core/facilities/foundations";
+import { makeTrackProximity } from "../core/terrain";
 import { windUniform } from "./furniture";
 
 export interface WorldMeshOptions {
@@ -614,10 +615,25 @@ function buildVegetation(plan: WorldPlan, season: "summer" | "autumn", track?: T
   const autumn = season === "autumn";
   // Stage-A contract: the facility reservation excludes vegetation
   const exclusion = track?.facilities?.reservation?.vegetationExclusionPolygons ?? [];
-  const veg = exclusion.length > 0
+  // hard rule: NOTHING grows inside the road corridor (platform + margin),
+  // regardless of plan staleness after track morphs
+  const prox = track ? makeTrackProximity(track.samples) : null;
+  const corridorClear = (x: number, y: number): boolean => {
+    if (!prox) return true;
+    const near = prox.nearest(x, y, 46);
+    return !near || near.d > 34; // platform max ~30 m incl. wide runoff
+  };
+  const veg = track
     ? {
         ...plan.vegetation,
-        trees: plan.vegetation.trees.filter((t) => !exclusion.some((poly) => pointInPolygon({ x: t.x, y: t.y }, poly))),
+        trees: plan.vegetation.trees.filter(
+          (t) => corridorClear(t.x, t.y) && !exclusion.some((poly) => pointInPolygon({ x: t.x, y: t.y }, poly)),
+        ),
+        boulders: plan.vegetation.boulders.filter((b) => corridorClear(b.x, b.y)),
+        tufts: plan.vegetation.tufts.filter((t) => {
+          const near = prox!.nearest(t.x, t.y, 20);
+          return !near || near.d > 8;
+        }),
       }
     : plan.vegetation;
 

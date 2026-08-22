@@ -485,11 +485,12 @@ export class View3D {
         wall.castShadow = true;
         this.trackGroup.add(wall);
       }
+      this.currentRawTerrain = state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null);
       this.addStartFinish(track);
       this.addStructureMeshes(track, state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null));
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
-      this.trackGroup.add(buildFurniture(track));
+      this.trackGroup.add(buildFurniture(track, (x, y, sPos, fallback) => this.furnitureSeat(track, x, y, sPos, fallback)));
       if (track.facilities) {
         const rawSurf: TerrainSurface | null = state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null);
         const fg = this.finalGround(track, rawSurf);
@@ -1187,6 +1188,7 @@ export class View3D {
   }
 
   private facilityGround: import("../core/facilities/types").GroundSurface | null = null;
+  private currentRawTerrain: TerrainSurface | null = null;
   private facilityLights: PointLight[] = [];
   private readonly basisM4 = new Matrix4();
   private readonly basisQ = new Quaternion();
@@ -1720,6 +1722,27 @@ export class View3D {
   }
 
   // ---------------------------------------------------- structures
+  /** Where a trackside object should stand: corridor surface inside the
+   * engineered envelope, final carved ground beyond it. */
+  private furnitureSeat(track: Track, x: number, y: number, sPos: number, fallback: number): number {
+    const corr = new Corridor(track);
+    const i = ((Math.round(sPos / track.ds) % track.samples.length) + track.samples.length) % track.samples.length;
+    const smp = track.samples[i];
+    const nx = -Math.sin(smp.heading);
+    const ny = Math.cos(smp.heading);
+    const off = (x - smp.x) * nx + (y - smp.y) * ny;
+    const ph = corr.platformHalf(i);
+    if (Math.abs(off) <= Math.max(ph.l, ph.r)) {
+      return corr.surface(sPos, off).z + 0.02;
+    }
+    const raw = this.currentRawTerrain;
+    if (raw) {
+      const carve = this.finalGround(track, raw);
+      if (carve) return carve(x, y) + 0.05;
+    }
+    return fallback;
+  }
+
   /** The single final ground: raw terrain → corridor carve → facility pads. */
   private finalGround(track: Track, raw: TerrainSurface | null): ((x: number, y: number) => number) | null {
     if (!raw) return null;

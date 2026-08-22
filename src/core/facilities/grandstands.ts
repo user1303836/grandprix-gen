@@ -23,6 +23,8 @@ import type {
 } from "./types";
 import { chooseFoundation, footprintStats, polygonOfRect } from "./foundations";
 import type { FoundationPlan } from "./types";
+import { Corridor } from "../corridor";
+import { makeTrackProximity } from "../terrain";
 
 export interface GrandstandResult {
   stands: GrandstandPlan[];
@@ -107,10 +109,44 @@ function planStand(
   const p = sampleAt(track, midS);
   const nx = -Math.sin(p.heading) * sideSign;
   const ny = Math.cos(p.heading) * sideSign;
-  const ox = p.x + nx * offset;
-  const oy = p.y + ny * offset;
+  // corridor clearance: the whole footprint must stay off the engineered
+  // platform (never overhang the runoff/road). Escalate the offset, else reject.
+  const corr = new Corridor(track);
+  const prox = makeTrackProximity(track.samples);
+  const needed = (x0: number, y0: number): boolean => {
+    const near = prox.nearest(x0, y0, 90);
+    if (!near || near.i === undefined) return true;
+    const ph = corr.platformHalf(near.i);
+    return near.d > Math.max(ph.l, ph.r) + 2.5;
+  };
+  let offsetUse = offset;
+  let ox = 0;
+  let oy = 0;
+  let placed = false;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    ox = p.x + nx * offsetUse;
+    oy = p.y + ny * offsetUse;
+    const fd = norm2({ x: center.x - ox, y: center.y - oy });
+    const ld = norm2({ x: -fd.y, y: fd.x });
+    const w2 = width / 2;
+    const dEst = 12; // front-edge clearance proxy; corners checked below
+    void dEst;
+    const corners = [
+      { x: ox - ld.x * w2, y: oy - ld.y * w2 },
+      { x: ox + ld.x * w2, y: oy + ld.y * w2 },
+      { x: ox - ld.x * w2 - fd.x * 30, y: oy - ld.y * w2 - fd.y * 30 },
+      { x: ox + ld.x * w2 + -fd.x * 30, y: oy + ld.y * w2 + -fd.y * 30 },
+    ];
+    if (corners.every((c) => needed(c.x, c.y))) {
+      placed = true;
+      break;
+    }
+    offsetUse += 14;
+  }
+  if (!placed) return null;
   // front direction: from stand center toward the target center
   const front = norm2({ x: center.x - ox, y: center.y - oy });
+  void offsetUse;
   const longDir = norm2({ x: -front.y, y: front.x });
   // rectangular footprint: front edge at origin, extends back by depth
   const rowDepth = kind === "temporary-bleacher" ? 0.8 : 0.9;
@@ -124,6 +160,7 @@ function planStand(
   const footprint = polygonOfRect(cx, cy, width / 2, depth / 2, angleU);
   const stats = footprintStats(ground, footprint);
   const baseZ = stats.samples > 0 ? Math.max(p.z + 0.4, stats.mean + 0.2) : p.z + 0.4;
+  void 0;
   const fdn = chooseFoundation(`fdn-${id}`, footprint, stats, baseZ, kind === "hillside" ? "hillside-terrace" : stats.max - stats.min > 3 ? "stepped-plinth" : undefined);
   // true facing: dot(frontDir, unit(targetCenter − stand origin))
   const toT = norm2({ x: center.x - ox, y: center.y - oy });
