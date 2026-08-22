@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { generateValidTrack } from "../src/core/generator";
-import { buildTrack, makeDNA, defaultDeform } from "../src/core/build";
+import { buildTrack } from "../src/core/build";
 import { generateElements } from "../src/core/generator";
 import { defaultParams, type Track } from "../src/core/types";
 import { Rng } from "../src/core/prng";
