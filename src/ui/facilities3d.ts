@@ -242,6 +242,9 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: im
   for (const sc of plan.screens) {
     group.add(screenTowerMesh(track, sc.x, sc.y, sc.z, sc.heading, sc.title));
   }
+  group.add(crowdMeshes(plan));
+  group.add(catchFenceMesh(plan, track));
+  group.add(pedestrianBridgeMeshes(plan, track));
   return group;
 }
 
@@ -818,5 +821,125 @@ export function screenTowerMesh(track: Track, x: number, y: number, z: number, h
   g.add(screen);
   g.position.set(x, z, -y);
   g.rotation.y = -heading;
+  return g;
+}
+
+// ============================================================ crowd + extras
+
+import { InstancedMesh as TInstancedMesh, Object3D as TObject3D, Color as TColor } from "three";
+
+/** Instanced crowd on the grandstands (one instanced mesh, colored capsules). */
+export function crowdMeshes(plan: import("../core/facilities/types").FacilityPlan): Group {
+  const g = new Group();
+  g.name = "crowd";
+  const fill = plan.identity.crowdFill;
+  if (fill < 0.05) return g;
+  const palette = [0xd8d4cc, 0xc83a2a, 0x2a5a9e, 0x3a9a5a, 0xe8a83a, 0x7a4a9e, 0x3aa8b8, 0xeadada, 0x4a4e54];
+  let total = 0;
+  for (const st of plan.grandstands) total += Math.round(st.capacityEstimate * fill * 0.5);
+  if (total <= 0) return g;
+  const geo = new BoxGeometry(0.42, 0.8, 0.3);
+  const mat = new MeshStandardMaterial({ roughness: 0.9 });
+  const inst = new TInstancedMesh(geo, mat, total);
+  const dummy = new TObject3D();
+  const col = new TColor();
+  let k = 0;
+  let rndState = plan.seed ^ 0xc20d;
+  const rnd = () => {
+    rndState = (rndState * 1664525 + 1013904223) >>> 0;
+    return rndState / 0xffffffff;
+  };
+  for (const st of plan.grandstands) {
+    const count = Math.round(st.capacityEstimate * fill * 0.5);
+    for (let i = 0; i < count && k < total; i++) {
+      const row = Math.floor(rnd() * st.rows);
+      const u = (rnd() - 0.5) * st.width * 0.92;
+      const px = st.origin.x + st.longDir.x * u - st.frontDir.x * (row * st.rowDepth + 0.3);
+      const py = st.origin.y + st.longDir.y * u - st.frontDir.y * (row * st.rowDepth + 0.3);
+      const pz = st.origin.z + row * st.rowRise + 0.75;
+      dummy.position.set(px, pz, -py);
+      dummy.updateMatrix();
+      inst.setMatrixAt(k, dummy.matrix);
+      col.setHex(palette[Math.floor(rnd() * palette.length)]);
+      col.offsetHSL((rnd() - 0.5) * 0.05, 0, (rnd() - 0.5) * 0.12);
+      inst.setColorAt(k, col);
+      k++;
+    }
+  }
+  inst.count = k;
+  inst.instanceMatrix.needsUpdate = true;
+  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+  g.add(inst);
+  return g;
+}
+
+/** Catch fencing along the pit straight (posts + translucent mesh). */
+export function catchFenceMesh(plan: import("../core/facilities/types").FacilityPlan, track: Track): Group {
+  const g = new Group();
+  g.name = "catch-fence";
+  if (!plan.pitLane || plan.identity.permanence === "temporary") return g;
+  const site = plan.site;
+  const sign = site.side === "left" ? 1 : -1;
+  // fence runs on the MAIN-STAND side (opposite the pits) and above the pit wall
+  const posts = new Group();
+  const postMat = new MeshStandardMaterial({ color: 0x6a6e74, roughness: 0.6, metalness: 0.4 });
+  const fenceMat = new MeshStandardMaterial({ color: 0x9aa4ae, roughness: 0.5, metalness: 0.3, transparent: true, opacity: 0.22, side: DoubleSide });
+  const { sampleAt } = { sampleAt: (tr: Track, s: number) => tr.samples[Math.round((((s % tr.length) + tr.length) % tr.length) / tr.ds) % tr.samples.length] };
+  const standSideSign = -sign;
+  let prevTop: { x: number; y: number; z: number } | null = null;
+  for (let s = site.sStart - 20; s <= site.sEnd + 20; s += 8) {
+    const p = sampleAt(track, s);
+    const nx = -Math.sin(p.heading) * standSideSign;
+    const ny = Math.cos(p.heading) * standSideSign;
+    const halfW = Math.max(track.props.widthL[Math.round(s / track.ds) % track.samples.length] ?? 6, track.props.widthR[Math.round(s / track.ds) % track.samples.length] ?? 6);
+    const off = halfW + 3.2;
+    const px = p.x + nx * off;
+    const py = p.y + ny * off;
+    const post = new Mesh(new BoxGeometry(0.12, 3.8, 0.12), postMat);
+    post.position.set(px, p.z + 1.9, -py);
+    posts.add(post);
+    if (prevTop) {
+      // mesh panel between posts
+      const len = Math.hypot(px - prevTop.x, py - prevTop.y);
+      const panel = new Mesh(new PlaneGeometry(len, 3.6), fenceMat);
+      panel.position.set((px + prevTop.x) / 2, p.z + 1.9, -(py + prevTop.y) / 2);
+      panel.rotation.y = -Math.atan2(py - prevTop.y, px - prevTop.x) + Math.PI / 2;
+      posts.add(panel);
+    }
+    prevTop = { x: px, y: py, z: p.z };
+  }
+  g.add(posts);
+  return g;
+}
+
+/** Pedestrian bridges from the complex plan. */
+export function pedestrianBridgeMeshes(plan: import("../core/facilities/types").FacilityPlan, track: Track): Group {
+  const g = new Group();
+  if (!plan.pitComplex || plan.pitComplex.pedestrianBridges.length === 0) return g;
+  const site = plan.site;
+  const sign = site.side === "left" ? 1 : -1;
+  const { sampleAt } = { sampleAt: (tr: Track, s: number) => tr.samples[Math.round((((s % tr.length) + tr.length) % tr.length) / tr.ds) % tr.samples.length] };
+  const mat = new MeshStandardMaterial({ color: 0xc8ccd2, roughness: 0.5, metalness: 0.4 });
+  for (const b of plan.pitComplex.pedestrianBridges) {
+    const sPos = site.sStart + b.u;
+    const p = sampleAt(track, sPos);
+    // span from behind the pit building to over the track edge
+    const spanLen = 34;
+    const nx = -Math.sin(p.heading) * sign;
+    const ny = Math.cos(p.heading) * sign;
+    const z = p.z + 7.5;
+    const span = new Mesh(new BoxGeometry(2.6, 2.2, spanLen), mat);
+    span.position.set(p.x + nx * 8, z, -(p.y + ny * 8));
+    span.rotation.y = -Math.atan2(ny, nx) + Math.PI / 2;
+    span.castShadow = true;
+    g.add(span);
+    // end towers
+    for (const t of [-6, 22]) {
+      const tower = new Mesh(new BoxGeometry(3, 7.5, 3), mat);
+      tower.position.set(p.x + nx * t, p.z + 3.75, -(p.y + ny * t));
+      g.add(tower);
+    }
+    void b;
+  }
   return g;
 }

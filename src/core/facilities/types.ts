@@ -60,6 +60,8 @@ export interface FacilityIdentity {
   scale: number;
   architecturalVariation: number;
   crowdCapacity: number;
+  /** fraction of seats filled (from crowd density control) */
+  crowdFill: number;
   budget: number;
   nightEventReadiness: number;
 }

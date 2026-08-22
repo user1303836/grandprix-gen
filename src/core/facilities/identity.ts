@@ -70,6 +70,7 @@ export function rollFacilityIdentity(
     scale,
     architecturalVariation: Math.min(1, Math.max(0, controls.variation + rnd() * 0.2 - 0.1)),
     crowdCapacity: capacity,
+    crowdFill: Math.min(1, Math.max(0, controls.crowdDensity)),
     budget: Math.round((0.3 + scale * 1.7) * 100) / 100,
     nightEventReadiness: night,
   };

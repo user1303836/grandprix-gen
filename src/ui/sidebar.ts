@@ -313,6 +313,7 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
     ["showControlPoints", "Debug DNA", state.showControlPoints],
     ["showTerrainHeat", "Terrain", state.showTerrainHeat],
     ["debugCivil", "Civil", state.debugCivil],
+    ["debugFacilities", "Facilities", state.debugFacilities],
     ["showSatellite", "Satellite", state.showSatellite],
   ];
   for (const [key, name, val] of toggles) {
