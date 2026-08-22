@@ -552,9 +552,10 @@ export class View3D {
         0,
       );
       this.trackGroup.add(this.valleyMist.mesh);
-      this.addTrees(state.terrain, track);
-      this.addGrassTufts(state.terrain, track);
-      this.addBoulders(state.terrain, track);
+      const scatterGround = this.finalGround(track, state.terrain)!;
+      this.addTrees(state.terrain, track, scatterGround);
+      this.addGrassTufts(state.terrain, track, scatterGround);
+      this.addBoulders(state.terrain, track, scatterGround);
       if (state.buildings && state.buildings.length > 0) {
         // seat buildings on the CARVED terrain so they don't float/sink
         // where the corridor flattens the ground
@@ -1532,7 +1533,7 @@ export class View3D {
   }
 
   /** Instanced low-poly trees on moderate slopes outside the corridor. */
-  private addTrees(grid: TerrainSurface, track: Track): void {
+  private addTrees(grid: TerrainSurface, track: Track, groundFn?: (x: number, y: number) => number): void {
     const proximity = makeTrackProximity(track.samples);
     const rng = new Rng(track.seed ^ 0x7ee5);
     const conifers: { m: Matrix4; s: number }[] = [];
@@ -1543,7 +1544,7 @@ export class View3D {
       for (let ix = 2; ix < grid.width - 2; ix += step) {
         const x = grid.originX + (ix + rng.spread(0.5)) * grid.resolution;
         const y = grid.originY + (iy + rng.spread(0.5)) * grid.resolution;
-        const z = grid.elevationAt(x, y);
+        const z = groundFn ? groundFn(x, y) : grid.elevationAt(x, y);
         if (!Number.isFinite(z) || z < 3) continue;
         const slope = grid.slopeAt(x, y);
         if (slope > 0.42) continue;
@@ -1949,7 +1950,7 @@ export class View3D {
   }
 
   /** Boulders on steep slopes (they read as rock outcrops). */
-  private addBoulders(grid: TerrainSurface, track: Track): void {
+  private addBoulders(grid: TerrainSurface, track: Track, groundFn?: (x: number, y: number) => number): void {
     const proximity = makeTrackProximity(track.samples);
     const rng = new Rng(track.seed ^ 0xb01d);
     const spots: { m: Matrix4; shade: number }[] = [];
@@ -2029,7 +2030,7 @@ export class View3D {
   }
 
   /** Small instanced grass tufts hugging the corridor (close-up richness). */
-  private addGrassTufts(grid: TerrainSurface, track: Track): void {
+  private addGrassTufts(grid: TerrainSurface, track: Track, groundFn?: (x: number, y: number) => number): void {
     const rng = new Rng(track.seed ^ 0x6a55);
     const proximity = makeTrackProximity(track.samples);
     const spots: Matrix4[] = [];
@@ -2045,7 +2046,7 @@ export class View3D {
         const ny = Math.cos(smp.heading);
         const x = smp.x + nx * off + rng.spread(3);
         const y = smp.y + ny * off + rng.spread(3);
-        const z = grid.elevationAt(x, y);
+        const z = groundFn ? groundFn(x, y) : grid.elevationAt(x, y);
         if (!Number.isFinite(z)) continue;
         const near = proximity.nearest(x, y, 6);
         if (near && near.d < 5.5) continue; // never in the road

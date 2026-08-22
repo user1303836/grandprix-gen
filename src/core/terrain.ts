@@ -413,6 +413,11 @@ export function corridorCarve(
   const proximity = makeTrackProximity(
     track.samples.map((p, i) => ({ x: p.x, y: p.y, z: p.z, ok: !track.carveMask || track.carveMask[i] === 1 })),
   );
+  // structure-owned sections (bridges/tunnels): terrain must never roof
+  // over them — a nearby active-section carve could otherwise climb over
+  const structProx = track.carveMask && track.carveMask.some((m) => m === 0)
+    ? makeTrackProximity(track.samples.map((p, i) => ({ x: p.x, y: p.y, z: p.z, ok: track.carveMask![i] === 0 })))
+    : null;
   const SEAT = 0.22;
   return (x: number, y: number) => {
     const gz = grid.elevationAt(x, y);
@@ -442,14 +447,24 @@ export function corridorCarve(
     const aOff = Math.abs(off);
     const plat = corridor!.platformHalf(best.i);
     const platLimit = off >= 0 ? plat.l : plat.r;
+    let target: number;
     if (aOff <= platLimit) {
       // inside the engineered envelope: seat just under the corridor surface
-      return surf.z - SEAT;
+      target = surf.z - SEAT;
+    } else {
+      // outside: blend from the platform edge to untouched ground
+      const edge = corridor!.surface(s, Math.sign(off) * platLimit).z - SEAT;
+      const t = Math.min(1, (aOff - platLimit) / Math.max(10, outerM - platLimit));
+      const sT = t * t * (3 - 2 * t);
+      target = edge * (1 - sT) + gz * sT;
     }
-    // outside: blend from the platform edge to untouched ground
-    const edge = corridor!.surface(s, Math.sign(off) * platLimit).z - SEAT;
-    const t = Math.min(1, (aOff - platLimit) / Math.max(10, outerM - platLimit));
-    const sT = t * t * (3 - 2 * t);
-    return edge * (1 - sT) + gz * sT;
+    // never roof over a structure-owned section (bridge deck / tunnel cut)
+    if (structProx) {
+      const near = structProx.nearest(x, y, 45);
+      if (near && near.z < target + 0.5) {
+        target = Math.min(target, near.z - 1.5);
+      }
+    }
+    return target;
   };
 }
