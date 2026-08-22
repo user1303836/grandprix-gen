@@ -19,6 +19,18 @@ import {
 import type { Track } from "../core/types";
 import { FeatureColors } from "../core/character";
 import { civilKindAt } from "../core/civil";
+import { Matrix4, Quaternion, Vector3 } from "three";
+
+/** Quaternion whose local +X spans ACROSS the road (right-handed:
+ * X=across, Y=up, Z=tangent of travel). Use for gantries/bridges/banners. */
+function acrossTrackQuat(heading: number): Quaternion {
+  const tx = Math.cos(heading);
+  const tz = -Math.sin(heading); // world tangent (plan y -> world -z)
+  const nx = -Math.sin(heading);
+  const nz = -Math.cos(heading); // plan-left normal in world
+  const m = new Matrix4().makeBasis(new Vector3(nx, 0, nz), new Vector3(0, 1, 0), new Vector3(tx, 0, tz));
+  return new Quaternion().setFromRotationMatrix(m);
+}
 
 /** Shared wind time uniform (the view drives it every frame). */
 export const windUniform = { value: 0 };
@@ -337,7 +349,7 @@ export function buildFurniture(track: Track): Group {
     const beamGeo = new BoxGeometry(w * 2, 1.15, 0.75);
     const beam = new Mesh(beamGeo, new MeshStandardMaterial({ map: makeGantryTexture(), roughness: 0.6 }));
     beam.position.set(f.x, f.z + 7.6, f.y);
-    beam.rotation.y = -f.heading;
+    beam.quaternion.copy(acrossTrackQuat(f.heading));
     beam.castShadow = true;
     group.add(beam);
     // start light bar: 5 lamps under the beam (red until the field is away)
@@ -350,10 +362,12 @@ export function buildFurniture(track: Track): Group {
         emissiveIntensity: 2.2,
       });
       const lamp = new Mesh(lampGeo, lampMat);
+      const ax = -Math.sin(f.heading);
+      const az = -Math.cos(f.heading);
       lamp.position.set(
-        f.x - Math.cos(f.heading) * (k - 2) * 0.85,
+        f.x + ax * (k - 2) * 0.85,
         f.z + 6.85,
-        -f.y - Math.sin(f.heading) * (k - 2) * 0.85,
+        -f.y + az * (k - 2) * 0.85,
       );
       lamp.rotation.y = -f.heading;
       lamp.name = `startlight_${k}`;

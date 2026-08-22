@@ -155,14 +155,36 @@ export function planFacilities(
   {
     const nScreens = Math.round(arch.screens[0] + (arch.screens[1] - arch.screens[0]) * identity.scale);
     const sign = site.side === "left" ? 1 : -1;
+    // screens live BEYOND the complex ends (never inside the building's
+    // depth band) and face across the track toward the main stand
+    const vols = complex.plan.volumes;
+    const collides = (x: number, y: number): boolean =>
+      vols.some((v) => {
+        const dx = x - v.cx;
+        const dy = y - v.cy;
+        const c = Math.cos(v.angleU);
+        const sN = Math.sin(v.angleU);
+        const lu = dx * c + dy * sN;
+        const lv = -dx * sN + dy * c;
+        return Math.abs(lu) < v.widthU / 2 + 6 && Math.abs(lv) < v.depthV / 2 + 6;
+      });
     for (let k = 0; k < nScreens; k++) {
-      const sPos = site.sStart + ((site.sEnd - site.sStart) * (k + 1)) / (nScreens + 1);
-      const p = sampleAt(track, sPos);
-      // on the pit side, facing ACROSS the track toward the main stand
-      const off = 30 + rnd() * 8;
+      // past the working section ends
+      const sPos = k % 2 === 0 ? site.sStart - 30 - k * 18 : site.sEnd + 30 + k * 18;
+      const p = sampleAt(track, ((sPos % track.length) + track.length) % track.length);
+      let off = 26;
+      let x = 0;
+      let y = 0;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        x = p.x + -Math.sin(p.heading) * sign * off;
+        y = p.y + Math.cos(p.heading) * sign * off;
+        if (!collides(x, y)) break;
+        off += 12;
+      }
+      if (collides(x, y)) continue;
       screens.push({
-        x: p.x + -Math.sin(p.heading) * sign * off,
-        y: p.y + Math.cos(p.heading) * sign * off,
+        x,
+        y,
         z: p.z,
         heading: p.heading + (sign > 0 ? -Math.PI / 2 : Math.PI / 2),
         title: `${track.identity?.namingFlavor === "alpine" ? "Alpen" : "Grand"} Prix · Lap Tower`,

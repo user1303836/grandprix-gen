@@ -92,7 +92,7 @@ import { carBasisWorld, planToWorld, roadFrameAt } from "../core/roadFrame";
 import { makeFacilityCarve } from "../core/facilities/foundations";
 import { corridorCarve, makeTrackProximity, type TerrainSurface } from "../core/terrain";
 import { Corridor } from "../core/corridor";
-import { buildWorldMeshes } from "./worldMeshes";
+import { buildWorldMeshes, waterfallTextures } from "./worldMeshes";
 import { surfaceFromPlan } from "../core/world/synthesis";
 import type { OsmBuilding } from "../core/osm";
 import { Rng } from "../core/prng";
@@ -648,22 +648,15 @@ export class View3D {
       this.trackGroup.add(ground);
     }
 
-    // shadow camera covers the scene
-    const span = track ? estimateSpan(track) * 1.4 : 2000;
-    const s = span * 0.75;
-    this.sun.shadow.camera.left = -s;
-    this.sun.shadow.camera.right = s;
-    this.sun.shadow.camera.top = s;
-    this.sun.shadow.camera.bottom = -s;
+    // shadow camera: a tight window that follows the camera's interest
+    // point every frame (crisp shadows where you look, not 1 m blobs)
     this.sun.shadow.camera.far = 9000;
-    this.sun.shadow.camera.updateProjectionMatrix();
     if (track) {
       const c = track.samples[0];
       this.sun.target.position.set(c.x, c.z, -c.y);
-      const dir = this.sunDirection();
-      this.sun.position.set(c.x + dir.x * span * 1.5, c.z + Math.max(120, dir.y * span * 1.5), -c.y + dir.z * span * 1.5);
     }
     // fog scales with the site so overview shots don't wash out
+    const span = track ? estimateSpan(track) * 1.4 : 2000;
     const preset = SKY_PRESETS[this.dayTime];
     this.scene.fog = new Fog(preset.fogColor, span * preset.fogNearK, span * preset.fogFarK);
 
@@ -2254,6 +2247,24 @@ export class View3D {
       this.updateHover(performance.now());
       this.updateFloodlights();
     }
+    // tight follow shadow frustum around the view target
+    {
+      const focus = this.driveActive && state.track
+        ? (() => { const p = sampleAt(state.track, this.driveS); return new Vector3(p.x, p.z, -p.y); })()
+        : this.controls.target;
+      const focusRadius = Math.min(420, Math.max(180, this.camera.position.distanceTo(focus) * 1.1));
+      const cam = this.sun.shadow.camera;
+      cam.left = -focusRadius;
+      cam.right = focusRadius;
+      cam.top = focusRadius;
+      cam.bottom = -focusRadius;
+      cam.near = 1;
+      cam.far = 5000;
+      this.sun.target.position.copy(focus);
+      this.sun.position.copy(focus).add(this.sunDirection().multiplyScalar(2500));
+      this.sun.target.updateMatrixWorld();
+      cam.updateProjectionMatrix();
+    }
     const tNow = performance.now() / 1000;
     this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
     this.sky.setTime(tNow);
@@ -2264,6 +2275,7 @@ export class View3D {
     this.valleyMist.lerpStrength(mistTarget, Math.min(1, dt));
     this.updateFlare();
     this.windTime.value = tNow;
+    for (const tex of waterfallTextures) tex.offset.y = -tNow * 0.9;
     windUniform.value = tNow;
     this.updateWetness(dt);
     this.spray.update(dt);

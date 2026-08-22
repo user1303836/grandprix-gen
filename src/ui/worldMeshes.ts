@@ -24,6 +24,8 @@ import {
   SphereGeometry,
   TorusGeometry,
   Vector3,
+  BoxGeometry,
+  RepeatWrapping,
 } from "three";
 import { Rng } from "../core/prng";
 import { makeWaterMaterial } from "./water";
@@ -401,6 +403,55 @@ function sampleGridZ(plan: WorldPlan, x: number, y: number): number {
 // water meshes
 // ---------------------------------------------------------------------------
 
+/** Live waterfall textures — the view scrolls map.offset each frame. */
+export const waterfallTextures: CanvasTexture[] = [];
+
+function makeWaterfallMaterial(): MeshStandardMaterial {
+  const cv = document.createElement("canvas");
+  cv.width = 64;
+  cv.height = 256;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#bcd8e8";
+  ctx.fillRect(0, 0, 64, 256);
+  for (let k = 0; k < 90; k++) {
+    ctx.fillStyle = `rgba(255,255,255,${0.25 + Math.random() * 0.5})`;
+    const x = Math.random() * 64;
+    ctx.fillRect(x, Math.random() * 256, 1 + Math.random() * 2, 30 + Math.random() * 90);
+  }
+  const tex = new CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = RepeatWrapping;
+  waterfallTextures.push(tex);
+  return new MeshStandardMaterial({ map: tex, transparent: true, opacity: 0.92, roughness: 0.25, side: DoubleSide });
+}
+
+/** A diorama waterfall where a river crosses the boundary ring. */
+function waterfallMesh(x: number, y: number, zTop: number, zBottom: number, width: number, outDir: { x: number; y: number }): Group {
+  const g = new Group();
+  const h = Math.max(2, zTop - zBottom);
+  const sheet = new Mesh(new PlaneGeometry(width, h, 6, 8), makeWaterfallMaterial());
+  // slight outward lean + convex belly
+  const pos = sheet.geometry.getAttribute("position");
+  for (let i = 0; i < pos.count; i++) {
+    const vy = pos.getY(i); // -h/2..h/2
+    const t = (vy + h / 2) / h; // 0 bottom, 1 top
+    pos.setZ(i, (1 - t) * (1 - t) * h * 0.12 + Math.sin(t * Math.PI) * 0.4);
+  }
+  sheet.geometry.computeVertexNormals();
+  sheet.position.set(0, -h / 2, 0);
+  g.add(sheet);
+  // foam lip + plunge pool
+  const foamMat = new MeshStandardMaterial({ color: 0xeef6fa, roughness: 0.6 });
+  const lip = new Mesh(new BoxGeometry(width + 0.6, 0.5, 1.2), foamMat);
+  lip.position.set(0, 0.05, 0.2);
+  g.add(lip);
+  const pool = new Mesh(new CylinderGeometry(width * 0.75, width * 0.9, 0.35, 12), foamMat);
+  pool.position.set(0, -h + 0.1, 1.2);
+  g.add(pool);
+  g.position.set(x, zTop, -y);
+  g.rotation.y = -Math.atan2(outDir.y, outDir.x) + Math.PI / 2;
+  return g;
+}
+
 function buildWaterMeshes(plan: WorldPlan, opts: WorldMeshOptions): Group {
   const group = new Group();
   group.name = "world-water";
@@ -413,7 +464,6 @@ function buildWaterMeshes(plan: WorldPlan, opts: WorldMeshOptions): Group {
       const curve = new CatmullRomCurve3(curvePts);
       const segs = Math.max(16, pts.length * 2);
       const positions: number[] = [];
-      const indices: number[] = [];
       const half = w.width / 2;
       for (let k = 0; k <= segs; k++) {
         const t = k / segs;
@@ -425,13 +475,61 @@ function buildWaterMeshes(plan: WorldPlan, opts: WorldMeshOptions): Group {
         positions.push(p.x + (nx / len) * half, p.y, p.z + (nz / len) * half);
         positions.push(p.x - (nx / len) * half, p.y, p.z - (nz / len) * half);
       }
+      // clip ribbon segments at the boundary ring; waterfalls at crossings
+      const ring = plan.boundary.mode !== "open" ? plan.boundary.ring : null;
+      const kept: number[] = [];
+      const remap = new Map<number, number>();
+      const newPos: number[] = [];
+      const mk = (vi: number): number => {
+        let nv = remap.get(vi);
+        if (nv === undefined) {
+          nv = newPos.length / 3;
+          newPos.push(positions[vi * 3], positions[vi * 3 + 1], positions[vi * 3 + 2]);
+          remap.set(vi, nv);
+        }
+        return nv;
+      };
       for (let k = 0; k < segs; k++) {
         const a = k * 2;
-        indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+        // segment midpoint in PLAN coords (positions are world: x, z, -y)
+        const mx = (positions[a * 3] + positions[(a + 2) * 3]) / 2;
+        const my = -((positions[a * 3 + 2] + positions[(a + 2) * 3 + 2]) / 2);
+        const inside = !ring || pointInRing(ring, mx, my);
+        if (inside) {
+          const a0 = mk(a);
+          const a1 = mk(a + 1);
+          const a2 = mk(a + 2);
+          const a3 = mk(a + 3);
+          kept.push(a0, a2, a1, a1, a2, a3);
+        } else if (ring) {
+          // river leaving the diorama → waterfall at the last inside edge
+          const lx = positions[a * 3];
+          const lz = positions[a * 3 + 1];
+          const ly = -positions[a * 3 + 2];
+          if (pointInRing(ring, lx, ly)) continue;
+          // crossing between previous inside point and this outside one
+          const prevMx = (positions[Math.max(0, a - 2) * 3] + positions[a * 3]) / 2;
+          const prevMy = -((positions[Math.max(0, a - 2) * 3 + 2] + positions[a * 3 + 2]) / 2);
+          const cx = (prevMx + mx) / 2;
+          const cy = (prevMy + my) / 2;
+          // outward direction: away from the ring centroid
+          let ccx = 0;
+          let ccy = 0;
+          for (const rp of ring) {
+            ccx += rp.x;
+            ccy += rp.y;
+          }
+          ccx /= ring.length;
+          ccy /= ring.length;
+          const od = { x: mx - ccx, y: my - ccy };
+          const odl = Math.hypot(od.x, od.y) || 1;
+          group.add(waterfallMesh(cx, cy, lz + 0.1, plan.boundary.baseZ, w.width * 0.9, { x: od.x / odl, y: od.y / odl }));
+          break; // one waterfall per river exit
+        }
       }
       const geo = new BufferGeometry();
-      geo.setAttribute("position", new BufferAttribute(new Float32Array(positions), 3));
-      geo.setIndex(indices);
+      geo.setAttribute("position", new BufferAttribute(new Float32Array(newPos), 3));
+      geo.setIndex(kept);
       geo.computeVertexNormals();
       const mat = makeWaterMaterial(opts.sunDir);
       mat.uniforms.shallow.value.setHex(opts.horizonColor);
@@ -440,8 +538,29 @@ function buildWaterMeshes(plan: WorldPlan, opts: WorldMeshOptions): Group {
       mesh.name = "world-river";
       group.add(mesh);
     } else if (w.type === "lake") {
-      const geo = new PlaneGeometry(w.radius * 2, w.radius * 2, 8, 8);
+      const geo = new PlaneGeometry(w.radius * 2, w.radius * 2, 12, 12);
       geo.rotateX(-Math.PI / 2);
+      // clip lake triangles that fall outside the diorama ring
+      const ring = plan.boundary.mode !== "open" ? plan.boundary.ring : null;
+      if (ring) {
+        const pos = geo.getAttribute("position");
+        const idx = geo.getIndex()!;
+        const kept: number[] = [];
+        for (let t = 0; t < idx.count; t += 3) {
+          let cx = 0;
+          let cz = 0;
+          for (let k = 0; k < 3; k++) {
+            const vi = idx.getX(t + k);
+            cx += pos.getX(vi);
+            cz += pos.getZ(vi);
+          }
+          cx /= 3;
+          cz /= 3;
+          // mesh local: x/z plane; plan y = -(local z) — lake centered at w
+          if (pointInRing(ring, w.x + cx, w.y + cz)) kept.push(idx.getX(t), idx.getX(t + 1), idx.getX(t + 2));
+        }
+        geo.setIndex(kept);
+      }
       const mat = makeWaterMaterial(opts.sunDir);
       mat.uniforms.shallow.value.setHex(opts.horizonColor);
       mat.uniforms.sunColor.value.setHex(opts.sunColor);
