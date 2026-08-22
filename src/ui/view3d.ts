@@ -788,7 +788,7 @@ export class View3D {
           return;
         }
         l.position.set(a.x, a.z, -a.y);
-        l.intensity = nightK * 700 * a.intensity;
+        l.intensity = nightK * 130 * a.intensity;
       });
     }
     // lights
