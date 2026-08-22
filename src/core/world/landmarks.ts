@@ -44,7 +44,9 @@ function placeHeroTree(ctx: Ctx, rng: Rng, out: Landmark[]): boolean {
   const nx = -Math.sin(p.heading);
   const ny = Math.cos(p.heading);
   const side = c.direction === "L" ? -1 : 1; // outside of the corner (left normal = left of travel)
-  const off = ROAD_CLEAR + 6 + rng.next() * 8;
+  // permissive/fantasy: closer, bigger — the canopy reaches over the road
+  const permissive = ctx.params.realism !== "realistic";
+  const off = ROAD_CLEAR + (permissive ? 1 + rng.next() * 4 : 6 + rng.next() * 8);
   const x = p.x + nx * off * side;
   const y = p.y + ny * off * side;
   const z = ctx.surface.elevationAt(x, y);
@@ -55,7 +57,7 @@ function placeHeroTree(ctx: Ctx, rng: Rng, out: Landmark[]): boolean {
     y,
     z,
     heading: rng.range(0, Math.PI * 2),
-    scale: 2.6 + rng.next() * 1.3,
+    scale: permissive ? 3.2 + rng.next() * 1.4 : 2.6 + rng.next() * 1.3,
     s: p.s,
     seed: rng.int(0, 1e9),
   });
