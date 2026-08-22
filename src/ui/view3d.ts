@@ -297,7 +297,9 @@ export class View3D {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.maxPolarAngle = Math.PI * 0.495;
+    // slightly below horizontal is fine (cursor-zoom descends toward the
+    // pointed ground point); the clamp must not fight the dolly translation
+    this.controls.maxPolarAngle = Math.PI * 0.53;
     // zoom toward the cursor: multiplicative dolly alone crawls at close
     // range (per-notch motion ∝ current radius) — cursor zoom keeps the
     // rate useful at every distance, and clamp the degenerate radii
@@ -2241,6 +2243,13 @@ export class View3D {
       this.camera.up.set(0, 1, 0);
       this.controls.enabled = true;
       this.controls.update();
+      // soft floor: cursor-zoom may not dive far under the world
+      if (state.track) {
+        let floor = -40;
+        if (state.terrain) floor = state.terrain.minElevation - 25;
+        else if (state.track.world?.grid) floor = -60; // world grid is near z≈0; allow the diorama edge view
+        if (this.camera.position.y < floor) this.camera.position.y += (floor - this.camera.position.y) * 0.5;
+      }
       this.updateLabels(dt);
       this.updateHover(performance.now());
       this.updateFloodlights();
