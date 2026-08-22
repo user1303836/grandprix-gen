@@ -85,7 +85,9 @@ import {
   RunoffNames as RUNOFF_NAMES,
 } from "../core/character";
 import { sampleAt } from "../core/types";
-import { carveSampler, makeTrackProximity, type TerrainGrid } from "../core/terrain";
+import { carveSampler, makeTrackProximity, type TerrainSurface } from "../core/terrain";
+import { buildWorldMeshes } from "./worldMeshes";
+import { surfaceFromPlan } from "../core/world/synthesis";
 import type { OsmBuilding } from "../core/osm";
 import { Rng } from "../core/prng";
 import type { AppState } from "./state";
@@ -464,7 +466,7 @@ export class View3D {
         this.trackGroup.add(wall);
       }
       this.addStartFinish(track);
-      this.addStructureMeshes(track, state.terrain);
+      this.addStructureMeshes(track, state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null));
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
@@ -550,6 +552,41 @@ export class View3D {
           this.trackGroup.add(win);
         }
       }
+    } else if (track && track.world) {
+      // procedural world: terrain mesh carved by the same sampler as site
+      // mode, plus boundary skirt, water, vegetation, and landmarks — all
+      // derived from the canonical WorldPlan
+      const world = track.world;
+      const surf = surfaceFromPlan(world);
+      const carve = carveSampler(surf, track.samples, track.carveMask, 40, 78, track.carveInner);
+      const wg = buildWorldMeshes(world, track, {
+        sunDir: this.sunDirection(),
+        horizonColor: SKY_STYLES[this.dayTime].horizon,
+        sunColor: SKY_STYLES[this.dayTime].sunColor,
+        season: this.season,
+        carve,
+      });
+      this.trackGroup.add(wg);
+      // atmosphere: cloud shadows + valley mist over the world
+      const g = world.grid;
+      const spanC = Math.max(g.width, g.height) * g.resolution;
+      this.cloudShadows.configure(
+        g.originX + (g.width * g.resolution) / 2,
+        -(g.originY + (g.height * g.resolution) / 2),
+        (g.minElevation + g.maxElevation) / 2 + 55,
+        spanC * 1.4,
+        SKY_PRESETS[this.dayTime].floodlights ? 0 : 0.3,
+      );
+      this.trackGroup.add(this.cloudShadows.mesh);
+      this.valleyMist.configure(
+        g.originX + (g.width * g.resolution) / 2,
+        -(g.originY + (g.height * g.resolution) / 2),
+        g.minElevation + 8,
+        spanC * 1.3,
+        0,
+      );
+      this.trackGroup.add(this.valleyMist.mesh);
+      this.maybeFitCamera(track, null);
     } else if (track) {
       const span = estimateSpan(track) * 9;
       const gm = buildGridMesh(() => -0.08, -span / 2, -span / 2, span / 2, span / 2, 2, 2);
@@ -592,7 +629,7 @@ export class View3D {
     });
   }
 
-  private fitCamera(track: Track, terrain: TerrainGrid | null): void {
+  private fitCamera(track: Track, terrain: TerrainSurface | null): void {
     const c = track.samples[0];
     this.controls.target.set(c.x, c.z, -c.y);
     const span = estimateSpan(track);
@@ -623,8 +660,8 @@ export class View3D {
    * the floating "fit" button is the explicit escape hatch.
    */
   private didInitialFit = false;
-  private lastTerrain: TerrainGrid | null = null;
-  private maybeFitCamera(track: Track, terrain: TerrainGrid | null): void {
+  private lastTerrain: TerrainSurface | null = null;
+  private maybeFitCamera(track: Track, terrain: TerrainSurface | null): void {
     const terrainChanged = terrain !== this.lastTerrain;
     if (!this.didInitialFit || terrainChanged) {
       this.fitCamera(track, terrain);
@@ -1176,7 +1213,7 @@ export class View3D {
 
   /** Terrain mesh with hypsometric + slope vertex colors. */
   private terrainMesh(
-    grid: TerrainGrid,
+    grid: TerrainSurface,
     sampler: (x: number, y: number) => number,
     maxSide: number,
     zOffset: number,
@@ -1263,7 +1300,7 @@ export class View3D {
   }
 
   /** Grid mesh with per-vertex hypsometric + hillshade coloring. */
-  private coloredGridMesh(positions: Float32Array, indices: Uint32Array, grid: TerrainGrid, drape: import("./imagery").ImageryDrape | null = null): Mesh {
+  private coloredGridMesh(positions: Float32Array, indices: Uint32Array, grid: TerrainSurface, drape: import("./imagery").ImageryDrape | null = null): Mesh {
     const nVerts = positions.length / 3;
     const pos = new Float32Array(positions.length);
     const colors = new Float32Array(nVerts * 3);
@@ -1383,7 +1420,7 @@ export class View3D {
   }
 
   /** Instanced low-poly trees on moderate slopes outside the corridor. */
-  private addTrees(grid: TerrainGrid, track: Track): void {
+  private addTrees(grid: TerrainSurface, track: Track): void {
     const proximity = makeTrackProximity(track.samples);
     const rng = new Rng(track.seed ^ 0x7ee5);
     const conifers: { m: Matrix4; s: number }[] = [];
@@ -1563,7 +1600,7 @@ export class View3D {
   }
 
   // ---------------------------------------------------- structures
-  private addStructureMeshes(track: Track, terrain: TerrainGrid | null): void {
+  private addStructureMeshes(track: Track, terrain: TerrainSurface | null): void {
     if (!this.trackGroup) return;
     const groundSampler = terrain ? (x: number, y: number) => terrain.elevationAt(x, y) : null;
     for (const part of buildStructureMeshes(track, groundSampler)) {
@@ -1788,7 +1825,7 @@ export class View3D {
   }
 
   /** Boulders on steep slopes (they read as rock outcrops). */
-  private addBoulders(grid: TerrainGrid, track: Track): void {
+  private addBoulders(grid: TerrainSurface, track: Track): void {
     const proximity = makeTrackProximity(track.samples);
     const rng = new Rng(track.seed ^ 0xb01d);
     const spots: { m: Matrix4; shade: number }[] = [];
@@ -1868,7 +1905,7 @@ export class View3D {
   }
 
   /** Small instanced grass tufts hugging the corridor (close-up richness). */
-  private addGrassTufts(grid: TerrainGrid, track: Track): void {
+  private addGrassTufts(grid: TerrainSurface, track: Track): void {
     const rng = new Rng(track.seed ^ 0x6a55);
     const proximity = makeTrackProximity(track.samples);
     const spots: Matrix4[] = [];

@@ -8,6 +8,7 @@ import type { SpeedProfile } from "../core/vehicle";
 import type { ValidationReport } from "../core/validate";
 import type { SiteRef, Track, TrackParams } from "../core/types";
 import type { TerrainGrid } from "../core/terrain";
+import { DEFAULT_ENV_PARAMS } from "../core/world/types";
 import type { OsmBuilding } from "../core/osm";
 import type { Candidate } from "../core/search";
 import { defaultParams } from "../core/types";
@@ -39,6 +40,7 @@ export interface AppState {
   vehicleId: string;
   candidates: Candidate[];
   candidatesSelected: Set<number>;
+  /** real-site DEM (geographic) */
   terrain: TerrainGrid | null;
   /** Coarse surrounding-area DEM for context rendering. */
   terrainContext: TerrainGrid | null;
@@ -64,6 +66,10 @@ export interface AppState {
   selectedS: number | null;
   /** Locked section (stations kept when regenerating the rest). */
   lockRange: { sStart: number; sEnd: number } | null;
+  /** blank-canvas world: environment seed (independent of track seed) */
+  envSeed: number;
+  /** blank-canvas world: environment params */
+  envParams: import("../core/world/types").EnvironmentParams;
   busy: string | null;
   progress: number | null;
 }
@@ -104,6 +110,8 @@ export class Store {
       debugCivil: false,
       selectedS: null,
       lockRange: null,
+      envSeed: (Math.random() * 0xffffffff) >>> 0,
+      envParams: { ...DEFAULT_ENV_PARAMS },
       busy: null,
       progress: null,
     };

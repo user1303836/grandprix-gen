@@ -368,6 +368,10 @@ export interface Track {
   props: PropertyProfiles;
   /** Legacy structure spans (derived from the civil plan for older consumers). */
   structures: import("./structures").StructureSpan[];
+  /** Blank-canvas world reference (serialized; small). Null in site mode. */
+  environment?: import("./world/types").TrackEnvironmentRef | null;
+  /** Composed procedural world (runtime only; stripped on save/load). */
+  world?: import("./world/types").WorldPlan | null;
   /** 1 = terrain may be carved toward the road at this sample; 0 = structure owns the gap. */
   carveMask: Uint8Array | null;
   /** Per-sample flat carve half-width (narrow benches in cuts). */

@@ -64,6 +64,8 @@ export interface GenerateJob {
   vehicleId: string;
   site?: SiteRef | null;
   terrain?: TerrainGridData | null;
+  /** blank-canvas world: env seed + params (site mode ignores this) */
+  environment?: import("../core/world/types").TrackEnvironmentRef | null;
   terrainCandidates?: number;
   /** building avoidance mask + strength (0 = off) */
   avoidBuildings?: { mask: import("../core/osm").BuildingMask; strength: number } | null;
@@ -84,7 +86,8 @@ export function runGenerate(job: GenerateJob): AnalysisOut | null {
     return analyze(r.track, vehicle);
   }
   const attempts = job.params.cornerCount > 16 ? 16 : 12;
-  const r = generateValidTrack(job.seed, job.params, {}, attempts);
+  const envOpts = job.environment ? { environment: { seed: job.environment.envSeed, params: job.environment.envParams } } : {};
+  const r = generateValidTrack(job.seed, job.params, envOpts, attempts);
   if (!r.track) return null;
   return analyze(r.track, vehicle);
 }
@@ -162,6 +165,8 @@ export interface MorphJob {
   vehicleId: string;
   structural: boolean;
   terrain?: TerrainGridData | null;
+  /** world override (e.g. compose a world onto a freshly adopted track) */
+  environment?: import("../core/world/types").TrackEnvironmentRef | null;
 }
 
 export function runMorph(job: MorphJob): AnalysisOut | null {
@@ -177,13 +182,16 @@ export function runMorph(job: MorphJob): AnalysisOut | null {
         };
       })()
     : {};
+  const envRef = job.environment ?? job.track.environment ?? null;
+  const envOpts = !job.terrain && envRef ? { environment: { seed: envRef.envSeed, params: envRef.envParams } } : {};
+  const buildOpts = { ...terrainOpts, ...envOpts };
   if (job.structural) {
     // structural re-synthesis needs the same rejection sampling as fresh
     // generation: new topologies can self-intersect
     let best: AnalysisOut | null = null;
     let bestIssues = Infinity;
     for (let attempt = 0; attempt < 10; attempt++) {
-      const r = regenerateStructure(saltSeed(job.track.seed, attempt * 733), job.params, terrainOpts);
+      const r = regenerateStructure(saltSeed(job.track.seed, attempt * 733), job.params, buildOpts);
       if (!r.track) continue;
       const out = analyze(r.track, vehicle);
       if (out.validation.valid) return out;
@@ -194,7 +202,7 @@ export function runMorph(job: MorphJob): AnalysisOut | null {
     }
     return best;
   }
-  const r = morphTrack(job.track, job.params, terrainOpts);
+  const r = morphTrack(job.track, job.params, buildOpts);
   if (!r.track) return null;
   return analyze(r.track, vehicle);
 }
@@ -271,6 +279,9 @@ export function runLockRegen(job: LockRegenJob): AnalysisOut | null {
       })()
     : {};
   // splicing can self-intersect too: retry with salted seeds
+  const envRef2 = job.track.environment ?? null;
+  const envOpts2 = !job.terrain && envRef2 ? { environment: { seed: envRef2.envSeed, params: envRef2.envParams } } : {};
+  const lockOpts = { ...terrainOpts, ...envOpts2 };
   let best: AnalysisOut | null = null;
   let bestIssues = Infinity;
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -279,7 +290,7 @@ export function runLockRegen(job: LockRegenJob): AnalysisOut | null {
       { sStart: job.lockStart, sEnd: job.lockEnd },
       job.params,
       saltSeed(job.seed, attempt * 391),
-      terrainOpts,
+      lockOpts,
     );
     if (!r.track) continue;
     const out = analyze(r.track, vehicle);

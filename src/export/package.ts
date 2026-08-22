@@ -13,7 +13,7 @@ import { trackToObj, trackMtl } from "./obj";
 import { trackToBlenderScript } from "./blender";
 import { trackToOpenDrive } from "./opendrive";
 import { trackToGlb } from "./glb";
-import type { TerrainGrid } from "../core/terrain";
+import type { TerrainSurface } from "../core/terrain";
 import type { Track } from "../core/types";
 
 export function downloadFile(name: string, content: string | Uint8Array | ArrayBuffer, mime = "text/plain"): void {
@@ -35,7 +35,8 @@ export function downloadFile(name: string, content: string | Uint8Array | ArrayB
 }
 
 export interface PackageOptions {
-  terrain?: TerrainGrid | null;
+  terrain?: TerrainSurface | null;
+  world?: import("../core/world/types").WorldPlan | null;
   includeGlb?: boolean;
 }
 
@@ -52,14 +53,14 @@ export async function buildTrackPackage(
   files[`${base}.geojson`] = strToU8(trackToGeoJSON(track));
   files[`${base}.dxf`] = strToU8(trackToDxf(track));
   files[`${base}.landxml`] = strToU8(trackToLandXML(track, { terrain: opts.terrain }));
-  files[`${base}.obj`] = strToU8(trackToObj(track, { terrain: opts.terrain }));
+  files[`${base}.obj`] = strToU8(trackToObj(track, { terrain: opts.terrain, world: opts.world }));
   files[`track.mtl`] = strToU8(trackMtl());
   files[`${base}.xodr`] = strToU8(trackToOpenDrive(track));
-  files[`${base}_blender.py`] = strToU8(trackToBlenderScript(track, { terrain: opts.terrain }));
+  files[`${base}_blender.py`] = strToU8(trackToBlenderScript(track, { terrain: opts.terrain, world: opts.world }));
   files["README.txt"] = strToU8(packageReadme(track));
   if (opts.includeGlb !== false) {
     try {
-      const glb = await trackToGlb(track, opts.terrain);
+      const glb = await trackToGlb(track, opts.terrain, opts.world);
       files[`${base}.glb`] = new Uint8Array(glb);
     } catch (e) {
       console.warn("GLB export failed in package build", e);
