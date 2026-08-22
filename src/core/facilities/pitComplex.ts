@@ -63,6 +63,32 @@ export function buildPitComplex(
   const { pointAt } = complexFrame(track, site);
   const sign = site.side === "left" ? 1 : -1;
 
+  // heading spread across the site: a long linear building cannot fan
+  // around a curving "straight" — fit ONE baseline in that case
+  let hMin = Infinity;
+  let hMax = -Infinity;
+  const hRef = sampleAt(track, (site.sStart + site.sEnd) / 2 % track.length).heading;
+  for (let sq = site.sStart; sq <= site.sEnd; sq += 12) {
+    const h = sampleAt(track, sq % track.length).heading;
+    const dh = Math.atan2(Math.sin(h - hRef), Math.cos(h - hRef));
+    hMin = Math.min(hMin, dh);
+    hMax = Math.max(hMax, dh);
+  }
+  const curvingSite = hMax - hMin > 0.12; // ~7°
+  // for curving sites: one straight facility baseline through the site
+  // midpoint (the building stands true; the pit lane may curve gently)
+  const midP = sampleAt(track, ((site.sStart + site.sEnd) / 2) % track.length);
+  const uMid = (site.sEnd - site.sStart) / 2;
+  const basePointAt = (u: number, v: number) => {
+    const du = u - uMid;
+    const tx = Math.cos(hRef);
+    const ty = Math.sin(hRef);
+    const nx = -Math.sin(hRef) * sign;
+    const ny = Math.cos(hRef) * sign;
+    return { x: midP.x + tx * du + nx * v, y: midP.y + ty * du + ny * v, z: midP.z, heading: hRef };
+  };
+  const volAt = curvingSite ? basePointAt : pointAt;
+
   const siteLen = site.sEnd - site.sStart;
   const garageApron = pitLane.laneBands.find((b) => b.kind === "garage-apron")!;
   const vFront = garageApron.offsetOuter + 0.4; // building face
@@ -107,13 +133,13 @@ export function buildPitComplex(
 
   for (let seg = 0; seg < nSeg; seg++) {
     const len = segLens[seg];
-    const cx = pointAt(uCur + len / 2, vFront + depth / 2);
+    const cx = volAt(uCur + len / 2, vFront + depth / 2);
     const vol: BuildingVolumePlan = {
       id: `garage-block-${seg}`,
       kind: "garage-block",
       cx: cx.x,
       cy: cx.y,
-      angleU: cx.heading,
+      angleU: volAt === basePointAt ? hRef : cx.heading,
       widthU: len,
       depthV: depth,
       baseZ: cx.z, // refined by foundations in phase 5
@@ -133,7 +159,7 @@ export function buildPitComplex(
     const segBays = Math.round(len / bayW);
     for (let b = 0; b < segBays && bayIdx < bays; b++) {
       const bu = uCur + (b + 0.5) * (len / segBays);
-      const bp = pointAt(bu, vFront);
+      const bp = volAt(bu, vFront);
       bays_out.push({
         id: bayIdx,
         volumeId: vol.id,
@@ -159,7 +185,7 @@ export function buildPitComplex(
   let tower: BuildingVolumePlan | null = null;
   if (arch.controlTower !== "none") {
     const tu = u0 + buildingLen * (0.35 + rnd() * 0.3);
-    const tp = pointAt(tu, vFront + depth + 6);
+    const tp = volAt(tu, vFront + depth + 6);
     const towerH = arch.controlTower === "landmark" ? 3 + rnd() * 2 : 1 + rnd();
     tower = {
       id: "race-control-tower",
@@ -183,7 +209,7 @@ export function buildPitComplex(
   const hospitality: BuildingVolumePlan[] = [];
   if (arch.balcony !== "none" && floors >= 2 && rnd() < 0.75) {
     const hu = u0 + buildingLen * (rnd() < 0.5 ? 0.15 : 0.85);
-    const hp = pointAt(hu, vFront + depth + 4);
+    const hp = volAt(hu, vFront + depth + 4);
     hospitality.push({
       id: "hospitality-0",
       kind: "hospitality",

@@ -40,6 +40,9 @@ export interface WorldMeshOptions {
   season: "summer" | "autumn";
   carve: (x: number, y: number) => number;
   maxTessSide?: number;
+  /** drop terrain quads whose center lies inside the road-covered corridor
+   * (prevents coarse triangles spanning the road between close sections) */
+  corridorCull?: (x: number, y: number) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,11 +167,13 @@ function buildWorldTerrainMesh(plan: WorldPlan, opts: WorldMeshOptions): Mesh {
   const indexList: number[] = [];
   for (let iy = 0; iy < ny - 1; iy++) {
     for (let ix = 0; ix < nx - 1; ix++) {
+      // quad center (plan)
+      const qcx = g.originX + (Math.min(g.width - 1, ix * step) + (step / 2)) * g.resolution;
+      const qcy = g.originY + (Math.min(g.height - 1, iy * step) + (step / 2)) * g.resolution;
+      if (opts.corridorCull && opts.corridorCull(qcx, qcy)) continue;
       if (maskToRing) {
         // drop quads whose center is outside the boundary ring
-        const gx = Math.min(g.width - 1, ix * step) * g.resolution + g.originX + (step * g.resolution) / 2;
-        const gy = Math.min(g.height - 1, iy * step) * g.resolution + g.originY + (step * g.resolution) / 2;
-        if (!pointInRing(ring, gx, gy)) continue;
+        if (!pointInRing(ring, qcx, qcy)) continue;
       }
       const a = iy * nx + ix;
       const b = a + 1;

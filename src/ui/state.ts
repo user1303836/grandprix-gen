@@ -66,6 +66,8 @@ export interface AppState {
   /** Civil debug overlay: structure-kind coloring + violations. */
   debugCivil: boolean;
   debugFacilities: boolean;
+  /** object-category visibility (debug attribution): name-predicate toggles */
+  layers: Record<string, boolean>;
   selectedS: number | null;
   /** Locked section (stations kept when regenerating the rest). */
   lockRange: { sStart: number; sEnd: number } | null;
@@ -121,6 +123,18 @@ export class Store {
       showTerrainHeat: true,
       debugCivil: false,
       debugFacilities: false,
+      layers: {
+        track: true,
+        pitLane: true,
+        pitComplex: true,
+        grandstands: true,
+        foundations: true,
+        structures: true,
+        terrain: true,
+        vegetation: true,
+        landmarks: true,
+        furniture: true,
+      },
       selectedS: null,
       lockRange: null,
       envSeed: (Math.random() * 0xffffffff) >>> 0,

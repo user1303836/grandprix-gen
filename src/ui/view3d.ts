@@ -91,6 +91,7 @@ import { sampleAt } from "../core/types";
 import { carBasisWorld, planToWorld, roadFrameAt } from "../core/roadFrame";
 import { makeFacilityCarve } from "../core/facilities/foundations";
 import { corridorCarve, makeTrackProximity, type TerrainSurface } from "../core/terrain";
+import { Corridor } from "../core/corridor";
 import { buildWorldMeshes } from "./worldMeshes";
 import { surfaceFromPlan } from "../core/world/synthesis";
 import type { OsmBuilding } from "../core/osm";
@@ -486,6 +487,7 @@ export class View3D {
       this.addPuddles(track);
       this.maybeFitCamera(track, state.terrain);
       this.rebuildFloodlights();
+      this.applyLayerVisibility();
     }
 
     if (state.terrain && track) {
@@ -572,12 +574,31 @@ export class View3D {
       const world = track.world;
       const surf = surfaceFromPlan(world);
       const carve = this.finalGround(track, surf)!;
+      // cull terrain quads inside the road-covered corridor (the road mesh
+      // owns road+kerb+runoff; terrain stays out so no triangle roofs it)
+      const corr = new Corridor(track);
+      const active = track.samples.filter((_, i) => !track.carveMask || track.carveMask[i] === 1);
+      const prox = makeTrackProximity(active);
+      const coveredAt = (i: number): number => {
+        const ph = corr.platformHalf(i);
+        return Math.max(ph.l, ph.r) - 1.2; // small overlap into the runoff edge
+      };
+      const corridorCull = (x: number, y: number): boolean => {
+        const cands = prox.within(x, y, 42);
+        for (const c of cands) {
+          // find the sample index via the map key (i carried by proximity)
+          const i = (c as { i?: number }).i ?? -1;
+          if (i >= 0 && c.d < coveredAt(i)) return true;
+        }
+        return false;
+      };
       const wg = buildWorldMeshes(world, track, {
         sunDir: this.sunDirection(),
         horizonColor: SKY_STYLES[this.dayTime].horizon,
         sunColor: SKY_STYLES[this.dayTime].sunColor,
         season: this.season,
         carve,
+        corridorCull,
       });
       this.trackGroup.add(wg);
       // atmosphere: cloud shadows + valley mist over the world
@@ -639,6 +660,34 @@ export class View3D {
       if (o instanceof Mesh && o.material instanceof MeshStandardMaterial) {
         o.material.envMapIntensity = intensity;
       }
+    });
+  }
+
+  /** Map an object name to its debug layer category. */
+  private layerOf(name: string): string | null {
+    if (!name) return null;
+    if (name === "facilities") return null; // container; children decide
+    if (name.startsWith("structure_pit-lane") || name === "pit-lane-ribbon" || name === "pit-wall") return "pitLane";
+    if (name === "pit-complex" || name.startsWith("screen")) return "pitComplex";
+    if (name === "grandstands") return "grandstands";
+    if (name === "facility-foundations") return "foundations";
+    if (name.startsWith("structure_")) return "structures";
+    if (name.startsWith("terrain") || name === "world-terrain" || name === "boundary" || name === "far-apron") return "terrain";
+    if (name.includes("trees") || name.includes("vegetation") || name === "grass-tufts" || name === "boulders") return "vegetation";
+    if (name.includes("landmark")) return "landmarks";
+    if (name === "crowd" || name === "catch-fence" || name === "facility-lamps" || name === "facility-lighting") return "furniture";
+    if (name.startsWith("asphalt") || name.startsWith("kerb") || name.startsWith("line") || name.startsWith("barrier")) return "track";
+    return null;
+  }
+
+  /** Apply object-category visibility toggles (cheap; no rebuild). */
+  applyLayerVisibility(): void {
+    const layers = this.state?.layers;
+    if (!layers) return;
+    const root = this.trackGroup ?? this.scene;
+    root.traverse((o) => {
+      const cat = this.layerOf(o.name);
+      if (cat) o.visible = layers[cat] !== false;
     });
   }
 

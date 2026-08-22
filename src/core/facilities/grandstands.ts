@@ -125,7 +125,9 @@ function planStand(
   const stats = footprintStats(ground, footprint);
   const baseZ = stats.samples > 0 ? Math.max(p.z + 0.4, stats.mean + 0.2) : p.z + 0.4;
   const fdn = chooseFoundation(`fdn-${id}`, footprint, stats, baseZ, kind === "hillside" ? "hillside-terrace" : stats.max - stats.min > 3 ? "stepped-plinth" : undefined);
-  const facing = front.x * Math.cos(0) + front.y * Math.sin(0);
+  // true facing: dot(frontDir, unit(targetCenter − stand origin))
+  const toT = norm2({ x: center.x - ox, y: center.y - oy });
+  const facing = front.x * toT.x + front.y * toT.y;
   const viewScore = sightlineScore(track, ground, { x: ox, y: oy }, baseZ, rows, rowRise, target);
   const capacity = Math.round(width * rows * 0.62 * tiers);
   const stand: GrandstandPlan = {

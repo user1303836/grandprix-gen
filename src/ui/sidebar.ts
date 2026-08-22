@@ -395,6 +395,32 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
     toggleRow2.append(b);
   }
   displayBody.push(toggleRow2);
+
+  // object-category layer toggles (debug attribution)
+  const layerRow = el("div", { className: "toggle-row" });
+  const LAYERS: [string, string][] = [
+    ["track", "Track"],
+    ["pitLane", "Pit Lane"],
+    ["pitComplex", "Pit Complex"],
+    ["grandstands", "Stands"],
+    ["foundations", "Foundations"],
+    ["structures", "Civil"],
+    ["terrain", "Ground"],
+    ["vegetation", "Vegetation"],
+    ["landmarks", "Landmarks"],
+    ["furniture", "Furniture"],
+  ];
+  for (const [key, name] of LAYERS) {
+    const b = el("button", { textContent: name });
+    if (state.layers[key] !== false) b.classList.add("active");
+    b.addEventListener("click", () => {
+      const cur = state.layers[key] === false;
+      cb.onDisplay({ layers: { ...state.layers, [key]: cur } } as Partial<AppState>);
+      b.classList.toggle("active", cur);
+    });
+    layerRow.append(b);
+  }
+  displayBody.push(layerRow);
   wrap.append(section("Display", displayBody, false));
 
   // ---------------------------------------------------------- section lock
