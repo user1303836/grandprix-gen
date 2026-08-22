@@ -517,6 +517,36 @@ export function synthesizeTerrain(
     }
   }
 
+  // corridor fill floor: near the road, ground never drops below what the
+  // civil planner can bridge realistically — except deliberate ravine/river
+  // digs (which ARE the bridges)
+  {
+    const stepF = Math.max(1, Math.round(4 / ds));
+    for (let i = 0; i < samples.length; i += stepF) {
+      const p = samples[i];
+      const sp = roleAt(spans, p.s, trackLength);
+      const dig = sp.kind === "ravine-crossing" || sp.kind === "river-crossing";
+      if (dig) continue;
+      // floor highest AT the road (embankment-shallow), deepening with
+      // distance — the near-corridor never sits in the ambiguous 3-8 m
+      // fill band unless the role is a deliberate dig
+      const nx = -Math.sin(p.heading);
+      const ny = Math.cos(p.heading);
+      for (let off = -66; off <= 66; off += 6) {
+        const wx = p.x + nx * off;
+        const wy = p.y + ny * off;
+        const gx = Math.round((wx - originX) / resolution);
+        const gy = Math.round((wy - originY) / resolution);
+        if (gx < 0 || gy < 0 || gx >= width || gy >= height) continue;
+        const gi = gy * width + gx;
+        const t = Math.min(1, Math.abs(off) / 60);
+        const depth = 2.2 + t * (24 + 10 * params.drama);
+        const target = p.z - depth;
+        if (z[gi] < target) z[gi] = target;
+      }
+    }
+  }
+
   // corridor protection: ground must stay below the road within the bench
   // (except on roles that deliberately cover the road: open-cut / tunnel-ridge)
   const stepI = Math.max(1, Math.round(3 / ds));
@@ -526,15 +556,18 @@ export function synthesizeTerrain(
     const above = sp.kind === "open-cut" || sp.kind === "tunnel-ridge";
     const nx = -Math.sin(p.heading);
     const ny = Math.cos(p.heading);
-    for (let off = -16; off <= 16; off += 4) {
+    // cap across the whole corridor band (road + kerbs + runoff ≈ ±30 m)
+    for (let off = -30; off <= 30; off += 4) {
       const wx = p.x + nx * off;
       const wy = p.y + ny * off;
       const gx = (wx - originX) / resolution;
       const gy = (wy - originY) / resolution;
       if (gx < 0 || gy < 0 || gx >= width - 1 || gy >= height - 1) continue;
       const gi = Math.round(gy) * width + Math.round(gx);
-      if (!above && z[gi] > p.z - 0.45) z[gi] = p.z - 0.45 - (Math.abs(off) / 16) * 0.5;
-      if (above && z[gi] < p.z + 1.2) z[gi] = p.z + 1.2; // keep the cover real
+      // runoff cross-slope: the cap sinks slightly with distance from the road
+      const cap = p.z - 0.55 - Math.abs(off) * 0.028;
+      if (!above && z[gi] > cap) z[gi] = cap;
+      if (above && Math.abs(off) <= 16 && z[gi] < p.z + 1.2) z[gi] = p.z + 1.2; // keep the cover real
     }
   }
 

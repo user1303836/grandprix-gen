@@ -311,6 +311,79 @@ export function planRelationships(input: RelationshipInput): RoleSpan[] {
     }
   }
 
+  // ---- structural crossing seeding ----------------------------------------
+  // DP local costs can never justify a river gorge over a calm valley floor;
+  // seed it deliberately (the task: cross at a chosen ravine/bridge span).
+  const wantWater =
+    (identity.hydrology === "river" || identity.hydrology === "seasonal-stream") && params.water >= 0.2;
+  const wantRavine = params.drama >= 0.45 && (allowed.has("ravine-crossing") || allowed.has("river-crossing"));
+  if (wantWater || wantRavine) {
+    // best site: the longest calm (straightish) stretch away from start;
+    // fall back to the calmest 90 m window anywhere off the start zone
+    let bestI = -1;
+    let bestRun = 0;
+    let run = 0;
+    for (let i = 0; i < n; i++) {
+      const calm = Math.abs(samples[i].kappa) < 0.0016 && !isStart[i];
+      run = calm ? run + 1 : 0;
+      if (run > bestRun) {
+        bestRun = run;
+        bestI = i;
+      }
+    }
+    if (bestI < 0 || bestRun * ds <= 120) {
+      // calmest sliding window (~90 m)
+      const W = Math.max(10, Math.round(90 / ds));
+      let bestScore = Infinity;
+      for (let i = 0; i < n; i++) {
+        if (isStart[i]) continue;
+        let acc = 0;
+        for (let k = 0; k < W; k++) acc += Math.abs(samples[(i + k) % n].kappa);
+        if (acc < bestScore) {
+          bestScore = acc;
+          bestI = i + Math.floor(W / 2);
+        }
+      }
+      bestRun = Math.round(120 / ds);
+    }
+    if (bestI > 0 && bestRun * ds > 90) {
+      const kind: RoleKind = wantWater ? "river-crossing" : "ravine-crossing";
+      const halfLen = (wantWater ? 45 : 38) / ds;
+      const c0 = bestI - Math.floor(halfLen);
+      const c1 = bestI + Math.floor(halfLen);
+      // normalize the window into [0, length)
+      const wStart = ((c0 * ds) % length + length) % length;
+      const wEnd = ((c1 * ds) % length + length) % length;
+      const wLen = wEnd - wStart;
+      if (wLen > 20 && wLen < length / 4) {
+        // rebuild: every span overlapping the window gets trimmed/split
+        const next: RoleSpan[] = [];
+        const norm = (a: number, b: number): [number, number] => (b > a ? [a, b] : [a, b + length]);
+        for (const sp of spans) {
+          const [a, b] = norm(sp.sStart, sp.sEnd);
+          const [wa, wb] = norm(wStart, wEnd);
+          if (wb <= a || wa >= b) {
+            next.push(sp);
+            continue;
+          }
+          const pre = { ...sp, sEnd: ((wa % length) + length) % length };
+            const post = { ...sp, sStart: ((wb % length) + length) % length };
+          if (wa - a > 24) next.push(pre);
+          next.push({
+            kind,
+            sStart: ((Math.max(a, wa) % length) + length) % length,
+            sEnd: ((Math.min(b, wb) % length) + length) % length,
+            side: 0,
+            intensity: 0.75 + rng.next() * 0.25,
+          });
+          if (b - wb > 24) next.push(post);
+        }
+        spans.length = 0;
+        spans.push(...next);
+      }
+    }
+  }
+
   // assign sides for bench/cliff roles from curvature + rng
   for (const sp of spans) {
     if (sp.kind === "hillside-bench" || sp.kind === "cliff-edge") {
