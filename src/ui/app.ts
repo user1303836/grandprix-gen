@@ -345,12 +345,11 @@ export class App {
     void (async () => {
       try {
         const { planFacilities } = await import("../core/facilities/plan");
-        const { carveSampler } = await import("../core/terrain");
+        const { corridorCarve } = await import("../core/terrain");
         const { surfaceFromPlan } = await import("../core/world/synthesis");
         const ground = s.terrain
           ? {
-              elevationAt: (x: number, y: number) =>
-                carveSampler(s.terrain!, s.track!.samples, s.track!.carveMask, 40, 120, s.track!.carveInner)(x, y),
+              elevationAt: corridorCarve(s.terrain!, s.track!, 120),
               slopeAt: (x: number, y: number) => s.terrain!.slopeAt(x, y),
             }
           : s.track!.world

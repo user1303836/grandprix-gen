@@ -90,7 +90,7 @@ import {
 import { sampleAt } from "../core/types";
 import { carBasisWorld, planToWorld, roadFrameAt } from "../core/roadFrame";
 import { makeFacilityCarve } from "../core/facilities/foundations";
-import { carveSampler, makeTrackProximity, type TerrainSurface } from "../core/terrain";
+import { corridorCarve, makeTrackProximity, type TerrainSurface } from "../core/terrain";
 import { buildWorldMeshes } from "./worldMeshes";
 import { surfaceFromPlan } from "../core/world/synthesis";
 import type { OsmBuilding } from "../core/osm";
@@ -476,18 +476,9 @@ export class View3D {
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
       if (track.facilities) {
-        const baseGround: import("../core/facilities/types").GroundSurface | null = state.terrain
-          ? {
-              elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
-              slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
-            }
-          : track.world
-            ? (() => {
-                const ws = surfaceFromPlan(track.world);
-                return { elevationAt: (x: number, y: number) => ws.elevationAt(x, y), slopeAt: (x: number, y: number) => ws.slopeAt(x, y) };
-              })()
-            : null;
-        this.facilityGround = makeFacilityCarve(baseGround, track.facilities.foundations);
+        const rawSurf: TerrainSurface | null = state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null);
+        const fg = this.finalGround(track, rawSurf);
+        this.facilityGround = fg ? { elevationAt: fg } : null;
         this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround));
       } else {
         this.facilityGround = null;
@@ -500,11 +491,7 @@ export class View3D {
     if (state.terrain && track) {
       // detailed carved site terrain
       const g = state.terrain;
-      let carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
-      if (track.facilities && track.facilities.foundations.length > 0) {
-        const fc = makeFacilityCarve({ elevationAt: carve }, track.facilities.foundations);
-        if (fc) carve = fc.elevationAt as typeof carve;
-      }
+      const carve = this.finalGround(track, g)!;
       // cell size well under the narrowest carved bench (~13 m in cuts)
       const span = Math.max(g.width, g.height) * g.resolution;
       const maxSide = Math.max(240, Math.min(720, Math.ceil(span / 9.5)));
@@ -522,7 +509,7 @@ export class View3D {
       // coarse triangles roof over the cut trenches the site mesh opens
       if (state.terrainContext) {
         const ctx = state.terrainContext;
-        const ctxCarve = carveSampler(ctx, track.samples, track.carveMask, 40, 120, track.carveInner);
+        const ctxCarve = this.finalGround(track, ctx)!;
         const ctxDrape = state.showSatellite ? state.imageryContext : null;
         const ctxMesh = this.terrainMesh(ctx, (x, y) => ctxCarve(x, y), 200, 0, null, ctxDrape);
         ctxMesh.position.y = -1.5; // site mesh wins the overlap
@@ -569,7 +556,7 @@ export class View3D {
       if (state.buildings && state.buildings.length > 0) {
         // seat buildings on the CARVED terrain so they don't float/sink
         // where the corridor flattens the ground
-        const carved = carveSampler(state.terrain, track.samples, track.carveMask, 40, 120, track.carveInner);
+        const carved = this.finalGround(track, state.terrain)!;
         this.trackGroup.add(this.buildingsMesh(state.buildings, carved));
         const win = this.buildingWindowsMesh(state.buildings, carved);
         if (win) {
@@ -584,7 +571,7 @@ export class View3D {
       // derived from the canonical WorldPlan
       const world = track.world;
       const surf = surfaceFromPlan(world);
-      const carve = carveSampler(surf, track.samples, track.carveMask, 40, 78, track.carveInner);
+      const carve = this.finalGround(track, surf)!;
       const wg = buildWorldMeshes(world, track, {
         sunDir: this.sunDirection(),
         horizonColor: SKY_STYLES[this.dayTime].horizon,
@@ -1676,9 +1663,21 @@ export class View3D {
   }
 
   // ---------------------------------------------------- structures
+  /** The single final ground: raw terrain → corridor carve → facility pads. */
+  private finalGround(track: Track, raw: TerrainSurface | null): ((x: number, y: number) => number) | null {
+    if (!raw) return null;
+    let carve = corridorCarve(raw, track, 120);
+    if (track.facilities && track.facilities.foundations.length > 0) {
+      const fc = makeFacilityCarve({ elevationAt: carve }, track.facilities.foundations);
+      if (fc) carve = fc.elevationAt as typeof carve;
+    }
+    return carve;
+  }
+
   private addStructureMeshes(track: Track, terrain: TerrainSurface | null): void {
     if (!this.trackGroup) return;
-    const groundSampler = terrain ? (x: number, y: number) => terrain.elevationAt(x, y) : null;
+    const finalCarve = this.finalGround(track, terrain);
+    const groundSampler = finalCarve ?? (terrain ? (x: number, y: number) => terrain.elevationAt(x, y) : null);
     for (const part of buildStructureMeshes(track, groundSampler)) {
       this.trackGroup.add(this.structureMesh(part));
     }
