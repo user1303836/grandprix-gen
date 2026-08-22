@@ -211,7 +211,7 @@ function pitWallGroup(plan: PitLanePlan): Group {
       // band-offset space grows toward the pit side: lateral = off*sideSign
       const lat = offFromPath * sideSign;
       seg.position.set(mx + nx0 * lat, mz + 0.55, -(my + ny0 * lat));
-      seg.rotation.y = -p0.heading;
+      seg.quaternion.copy(basisForWall(p0.heading));
       seg.castShadow = true;
       g.add(seg);
     }
@@ -227,8 +227,259 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track): Group {
     group.add(pitLaneMesh(plan.pitLane));
     group.add(pitWallGroup(plan.pitLane));
   }
-  void track;
+  if (plan.pitComplex) {
+    group.add(pitComplexMeshes(plan.pitComplex, track, { sStart: plan.site.sStart, side: plan.site.side }));
+  }
   return group;
 }
 
 export { Float32BufferAttribute, Uint32BufferAttribute };
+
+// ============================================================ pit complex
+
+import {
+  CylinderGeometry,
+  Matrix4,
+  PlaneGeometry,
+  Quaternion,
+  Vector3,
+} from "three";
+import type { BuildingVolumePlan, PitComplexPlan } from "../core/facilities/types";
+
+const WALL_MAT = new MeshStandardMaterial({ color: 0xcfd3d8, roughness: 0.75 });
+const ROOF_MAT = new MeshStandardMaterial({ color: 0x8d939b, roughness: 0.55, metalness: 0.15 });
+const GLAZE_MAT = new MeshStandardMaterial({ color: 0x2c3e50, roughness: 0.18, metalness: 0.65 });
+const CONCRETE_MAT = new MeshStandardMaterial({ color: 0xb6b2a8, roughness: 0.9 });
+const CANVAS_MAT = new MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.85, side: DoubleSide });
+
+/**
+ * Orientation bases in world space — no Euler guessing.
+ * Plan heading h: world tangent tW=(cos h,0,-sin h), plan-left nW=(-sin h,0,-cos h).
+ */
+function basisForBuilding(heading: number, sideSign: number): Quaternion {
+  // building local axes: +X = along the straight (u), +Z = away from track (v)
+  const tx = Math.cos(heading);
+  const tz = -Math.sin(heading);
+  const nx = -Math.sin(heading);
+  const nz = -Math.cos(heading);
+  const x = new Vector3(-sideSign * tx, 0, -sideSign * tz);
+  const y = new Vector3(0, 1, 0);
+  const z = new Vector3(sideSign * nx, 0, sideSign * nz);
+  const m = new Matrix4().makeBasis(x, y, z);
+  return new Quaternion().setFromRotationMatrix(m);
+}
+
+function basisForWall(heading: number): Quaternion {
+  // wall local axes: +Z along travel, +X across (plan-left)
+  const tx = Math.cos(heading);
+  const tz = -Math.sin(heading);
+  const nx = -Math.sin(heading);
+  const nz = -Math.cos(heading);
+  const m = new Matrix4().makeBasis(new Vector3(nx, 0, nz), new Vector3(0, 1, 0), new Vector3(tx, 0, tz));
+  return new Quaternion().setFromRotationMatrix(m);
+}
+
+/** One building volume: stacked floors with facade treatments + roof. */
+function volumeMesh(v: BuildingVolumePlan, sideSign: number): Group {
+  const g = new Group();
+  const totalH = v.floors * v.floorHeight;
+  const bodyMat = v.kind === "tower" || v.kind === "race-control" ? CONCRETE_MAT : WALL_MAT;
+  const body = new Mesh(new BoxGeometry(v.widthU, totalH, v.depthV), bodyMat);
+  body.position.y = totalH / 2;
+  body.castShadow = true;
+  g.add(body);
+  // facade bands per floor on the TRACK-FACING side (local -z)
+  for (let f = 0; f < v.floors; f++) {
+    const kind = v.facade[f] ?? "solid";
+    const y = f * v.floorHeight;
+    if (kind === "glazed") {
+      const gl = new Mesh(new BoxGeometry(v.widthU * 0.94, v.floorHeight * 0.62, 0.18), GLAZE_MAT);
+      gl.position.set(0, y + v.floorHeight * 0.52, -v.depthV / 2 - 0.1);
+      g.add(gl);
+    } else if (kind === "balcony") {
+      const slab = new Mesh(new BoxGeometry(v.widthU * 0.96, 0.16, 1.6), CONCRETE_MAT);
+      slab.position.set(0, y + v.floorHeight * 0.12, -v.depthV / 2 - 0.8);
+      g.add(slab);
+      const rail = new Mesh(new BoxGeometry(v.widthU * 0.96, 0.9, 0.08), GLAZE_MAT);
+      rail.position.set(0, y + v.floorHeight * 0.55, -v.depthV / 2 - 1.55);
+      g.add(rail);
+    }
+  }
+  // roof by kind
+  if (v.roof === "flat" || v.roof === "none") {
+    const slab = new Mesh(new BoxGeometry(v.widthU + 0.5, 0.3, v.depthV + 0.5), ROOF_MAT);
+    slab.position.y = totalH + 0.15;
+    g.add(slab);
+  } else if (v.roof === "shallow-pitch") {
+    const slab = new Mesh(new BoxGeometry(v.widthU + 0.6, 0.24, v.depthV * 0.62), ROOF_MAT);
+    slab.position.set(0, totalH + 0.55, -v.depthV * 0.19);
+    slab.rotation.x = 0.16;
+    g.add(slab);
+    const slab2 = slab.clone();
+    slab2.position.z = v.depthV * 0.19;
+    slab2.rotation.x = -0.16;
+    g.add(slab2);
+  } else if (v.roof === "cantilever") {
+    const slab = new Mesh(new BoxGeometry(v.widthU + 1.2, 0.28, v.depthV + 5.5), ROOF_MAT);
+    slab.position.set(0, totalH + 0.35, -2.2);
+    g.add(slab);
+  } else if (v.roof === "tensile-canopy" || v.roof === "fabric") {
+    // scalloped membrane: series of arched thin boxes
+    const n = Math.max(3, Math.round(v.widthU / 14));
+    for (let k = 0; k < n; k++) {
+      const w = v.widthU / n;
+      const mem = new Mesh(new CylinderGeometry(w * 0.62, w * 0.62, 0.16, 10, 1, false, 0, Math.PI), CANVAS_MAT);
+      mem.rotation.z = Math.PI / 2;
+      mem.rotation.y = Math.PI / 2;
+      mem.position.set(-v.widthU / 2 + (k + 0.5) * w, totalH + 0.4, -0.6);
+      mem.scale.set(1, 1, v.depthV + 4 / (w * 0.62));
+      g.add(mem);
+    }
+  } else if (v.roof === "wave") {
+    const slab1 = new Mesh(new BoxGeometry(v.widthU * 0.55, 0.3, v.depthV + 3), ROOF_MAT);
+    slab1.position.set(-v.widthU * 0.2, totalH + 0.8, -1);
+    slab1.rotation.z = 0.06;
+    g.add(slab1);
+    const slab2 = new Mesh(new BoxGeometry(v.widthU * 0.55, 0.3, v.depthV + 3), ROOF_MAT);
+    slab2.position.set(v.widthU * 0.22, totalH + 1.5, -0.5);
+    slab2.rotation.z = -0.07;
+    g.add(slab2);
+  }
+  g.position.set(v.cx, v.baseZ, -v.cy);
+  g.quaternion.copy(basisForBuilding(v.angleU, sideSign));
+  return g;
+}
+
+/** Garage doors on the building front, one per bay. */
+function garageDoorGroup(complex: PitComplexPlan): Group {
+  const g = new Group();
+  const numTexCache = new Map<string, CanvasTexture>();
+  const numberTex = (n: number): CanvasTexture => {
+    const key = String(n);
+    let t = numTexCache.get(key);
+    if (!t) {
+      const cv = document.createElement("canvas");
+      cv.width = 64;
+      cv.height = 48;
+      const ctx = cv.getContext("2d")!;
+      ctx.fillStyle = "#181c20";
+      ctx.fillRect(0, 0, 64, 48);
+      ctx.fillStyle = "#f2f4f6";
+      ctx.font = "bold 30px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(String(n), 32, 26);
+      t = new CanvasTexture(cv);
+      t.colorSpace = SRGBColorSpace;
+      numTexCache.set(key, t);
+    }
+    return t;
+  };
+  for (const bay of complex.garageBays) {
+    const door = new Mesh(
+      new BoxGeometry(bay.width, 3.1, 0.14),
+      new MeshStandardMaterial({ color: bay.doorColor, roughness: 0.5, metalness: 0.3 }),
+    );
+    door.position.set(bay.x, bay.z + 1.55, -bay.y);
+    door.quaternion.copy(basisForBuilding(bay.heading, bay.sideSign));
+    g.add(door);
+    // lintel number board above the door
+    const board = new Mesh(
+      new PlaneGeometry(1.6, 1.1),
+      new MeshStandardMaterial({ map: numberTex(bay.number), roughness: 0.6 }),
+    );
+    board.position.set(bay.x, bay.z + 3.6, -bay.y);
+    board.quaternion.copy(basisForBuilding(bay.heading, bay.sideSign));
+    // face outward (toward the lane): the door plane's -z side after rotation
+    board.translateZ(-0.12);
+    g.add(board);
+    if (bay.doorOpen) {
+      // dark open doorway behind the (raised) door
+      const open = new Mesh(new BoxGeometry(bay.width, 3.0, 0.1), new MeshStandardMaterial({ color: 0x0c0e10, roughness: 1 }));
+      open.position.set(bay.x, bay.z + 1.5, -bay.y);
+      open.quaternion.copy(basisForBuilding(bay.heading, bay.sideSign));
+      open.translateZ(0.1);
+      g.add(open);
+      door.position.y = bay.z + 3.0;
+      door.rotation.x = -0.5;
+    }
+  }
+  return g;
+}
+
+/** Apron canopy slab + columns toward the lane. */
+function canopyGroup(complex: PitComplexPlan, track: Track, siteS: { sStart: number; side: "left" | "right" }): Group {
+  const g = new Group();
+  const c = complex.canopy;
+  if (!c) return g;
+  const sign = siteS.side === "left" ? 1 : -1;
+  const uMid = (c.uStart + c.uEnd) / 2;
+  // sample the frame at the canopy mid-u
+  const { sampleAt } = { sampleAt: (tr: Track, s: number) => tr.samples[Math.round((((s % tr.length) + tr.length) % tr.length) / tr.ds) % tr.samples.length] };
+  const p = sampleAt(track, siteS.sStart + uMid);
+  const nx = -Math.sin(p.heading) * sign;
+  const ny = Math.cos(p.heading) * sign;
+  const cx = p.x + nx * (c.vFront + c.vBack) / 2;
+  const cy = p.y + ny * (c.vFront + c.vBack) / 2;
+  const z = p.z + 4.6;
+  const slab = new Mesh(new BoxGeometry(c.uEnd - c.uStart, 0.22, c.vBack - c.vFront), ROOF_MAT);
+  slab.position.set(cx, z, -cy);
+  slab.quaternion.copy(basisForBuilding(p.heading, sign));
+  slab.castShadow = true;
+  g.add(slab);
+  // columns at the front edge
+  const n = c.columns;
+  for (let k = 0; k < n; k++) {
+    const u = c.uStart + ((c.uEnd - c.uStart) * (k + 0.5)) / n;
+    const pu = track.samples[Math.round(((siteS.sStart + u) % track.length) / track.ds) % track.samples.length];
+    const col = new Mesh(new CylinderGeometry(0.14, 0.14, 4.6, 8), CONCRETE_MAT);
+    col.position.set(pu.x + (-Math.sin(pu.heading) * sign) * c.vFront, pu.z + 2.3, -(pu.y + Math.cos(pu.heading) * sign * c.vFront));
+    g.add(col);
+  }
+  return g;
+}
+
+/** Paddock apron surface polygon. */
+function paddockMesh(complex: PitComplexPlan): Mesh | null {
+  const pad = complex.paddockApron;
+  if (!pad || pad.polygon.length < 3) return null;
+  const n = pad.polygon.length;
+  const positions = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    positions[i * 3] = pad.polygon[i].x;
+    positions[i * 3 + 1] = pad.polygon[i].y;
+    positions[i * 3 + 2] = pad.z + 0.03;
+  }
+  const indices: number[] = [];
+  for (let i = 1; i < n - 1; i++) indices.push(0, i, i + 1);
+  const geo = new BufferGeometry();
+  geo.setAttribute("position", new BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  // note: polygon is plan (x,y); convert in-place (mesh built in plan space)
+  const posAttr = geo.getAttribute("position") as BufferAttribute;
+  for (let i = 0; i < posAttr.count; i++) {
+    const x = posAttr.getX(i);
+    const y = posAttr.getY(i);
+    const z = posAttr.getZ(i);
+    posAttr.setXYZ(i, x, z, -y);
+  }
+  geo.computeVertexNormals();
+  const mat = new MeshStandardMaterial({ color: pad.surface === "gravel" ? 0x8a8578 : 0x3c4046, roughness: 1, side: DoubleSide });
+  const mesh = new Mesh(geo, mat);
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/** Pit-complex meshes (buildings, doors, canopy, paddock). */
+export function pitComplexMeshes(complex: PitComplexPlan, track: Track, site: { sStart: number; side: "left" | "right" }): Group {
+  const g = new Group();
+  g.name = "pit-complex";
+  const sideSign = site.side === "left" ? 1 : -1;
+  for (const v of complex.volumes) g.add(volumeMesh(v, sideSign));
+  g.add(garageDoorGroup(complex));
+  g.add(canopyGroup(complex, track, site));
+  const pad = paddockMesh(complex);
+  if (pad) g.add(pad);
+  return g;
+}

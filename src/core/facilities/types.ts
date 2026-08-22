@@ -218,6 +218,13 @@ export interface GarageBayPlan {
   /** center of the bay frontage along the straight */
   u: number;
   frontOffsetV: number; // v of the garage door plane
+  /** world position of the door center (baked at planning time) */
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  /** pit side sign (+1 left, -1 right) for orientation */
+  sideSign: number;
   width: number;
   doorColor: number;
   doorOpen: boolean;

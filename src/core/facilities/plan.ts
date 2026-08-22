@@ -8,6 +8,7 @@ import { archetypeById } from "../../data/facilityArchetypes";
 import { mulberry32 } from "../prng";
 import { sampleAt, type Track } from "../types";
 import { rollFacilityIdentity } from "./identity";
+import { buildPitComplex } from "./pitComplex";
 import { buildPitLane } from "./pitLane";
 import { selectFacilitySite } from "./siteSelection";
 import {
@@ -71,6 +72,12 @@ export function planFacilities(
     violations.push({ kind: "pitlane-topology", s: 0, detail: v });
   }
 
+  // ---- pit complex (phase 4) -----------------------------------------------
+  const complex = buildPitComplex(track, site, pit.plan, arch, identity, controls.seed);
+  for (const v of complex.violations) {
+    violations.push({ kind: "building-unsupported", s: 0, detail: v });
+  }
+
   // ---- reservation polygons (Stage A contract) -----------------------------
   const buildingDepth = arch.depth[0] + (arch.depth[1] - arch.depth[0]) * 0.5;
   const pitHalfW = pit.plan.width;
@@ -96,7 +103,7 @@ export function planFacilities(
     identity,
     site,
     pitLane: pit.plan,
-    pitComplex: null,
+    pitComplex: complex.plan,
     grandstands: [],
     foundations: [],
     lighting: { anchors: [], realLightIndices: [] },

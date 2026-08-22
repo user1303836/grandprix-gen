@@ -135,7 +135,8 @@ export function buildPitLane(
     const b = centerline[Math.min(centerline.length - 1, k + 1)];
     centerline[k].heading = Math.atan2(b.y - a.y, b.x - a.x);
     const ds = Math.max(1e-3, b.s - a.s);
-    centerline[k].kappa = (b.heading - a.heading) / ds; // signed later if needed
+    const dh = Math.atan2(Math.sin(b.heading - a.heading), Math.cos(b.heading - a.heading));
+    centerline[k].kappa = dh / ds;
   }
   // z: gentle own grade — heavy smoothing so the lane never warps per-sample
   const win = Math.max(3, Math.round(40 / step));
