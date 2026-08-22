@@ -19,6 +19,8 @@ import {
 } from "three";
 import type { Track } from "../core/types";
 import type { FacilityPlan, PitLanePlan } from "../core/facilities/types";
+import { planPointToWorld } from "../core/planWorld";
+import { mulberry32 } from "../core/prng";
 
 /** Band colors for the painted pit-lane canvas. */
 const BAND_COLORS: Record<string, string> = {
@@ -49,11 +51,12 @@ function paintPitLaneTexture(plan: PitLanePlan): { tex: CanvasTexture; widthM: n
     ctx.fillStyle = BAND_COLORS[b.kind] ?? "#333";
     ctx.fillRect(xOf(b.offsetInner), 0, xOf(b.offsetOuter) - xOf(b.offsetInner), cv.height);
   }
-  // asphalt noise
+  // asphalt noise (seeded — the plan is deterministic)
+  const noise = mulberry32(0x91a7 + Math.round(lengthM));
   ctx.globalAlpha = 0.05;
   for (let k = 0; k < 900; k++) {
-    ctx.fillStyle = Math.random() > 0.5 ? "#fff" : "#000";
-    ctx.fillRect(Math.random() * PXW, Math.random() * cv.height, 1.5, 1.5);
+    ctx.fillStyle = noise() > 0.5 ? "#fff" : "#000";
+    ctx.fillRect(noise() * PXW, noise() * cv.height, 1.5, 1.5);
   }
   ctx.globalAlpha = 1;
   const fast = plan.laneBands.find((b) => b.kind === "fast-lane")!;
@@ -134,12 +137,14 @@ function pitLaneMesh(plan: PitLanePlan): Mesh {
     const ny = Math.cos(c.heading);
     // path runs mid-lane; lane extends ±widthM/2 around it
     const half = widthM / 2;
-    positions[i * 6] = c.x - nx * half;
-    positions[i * 6 + 1] = c.y - ny * half;
-    positions[i * 6 + 2] = c.z;
-    positions[i * 6 + 3] = c.x + nx * half;
-    positions[i * 6 + 4] = c.y + ny * half;
-    positions[i * 6 + 5] = c.z;
+    const wA = planPointToWorld(c.x - nx * half, c.y - ny * half, c.z);
+    const wB = planPointToWorld(c.x + nx * half, c.y + ny * half, c.z);
+    positions[i * 6] = wA.x;
+    positions[i * 6 + 1] = wA.y;
+    positions[i * 6 + 2] = wA.z;
+    positions[i * 6 + 3] = wB.x;
+    positions[i * 6 + 4] = wB.y;
+    positions[i * 6 + 5] = wB.z;
     uvs[i * 4] = 0;
     uvs[i * 4 + 1] = c.s / lengthM;
     uvs[i * 4 + 2] = 1;
