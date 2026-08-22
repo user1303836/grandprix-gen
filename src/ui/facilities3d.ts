@@ -19,6 +19,8 @@ import {
 } from "three";
 import type { Track } from "../core/types";
 import type { FacilityPlan, PitLanePlan } from "../core/facilities/types";
+import { planPointToWorld } from "../core/planWorld";
+import { mulberry32 } from "../core/prng";
 
 /** Band colors for the painted pit-lane canvas. */
 const BAND_COLORS: Record<string, string> = {
@@ -49,11 +51,12 @@ function paintPitLaneTexture(plan: PitLanePlan): { tex: CanvasTexture; widthM: n
     ctx.fillStyle = BAND_COLORS[b.kind] ?? "#333";
     ctx.fillRect(xOf(b.offsetInner), 0, xOf(b.offsetOuter) - xOf(b.offsetInner), cv.height);
   }
-  // asphalt noise
+  // asphalt noise (seeded — the plan is deterministic)
+  const noise = mulberry32(0x91a7 + Math.round(lengthM));
   ctx.globalAlpha = 0.05;
   for (let k = 0; k < 900; k++) {
-    ctx.fillStyle = Math.random() > 0.5 ? "#fff" : "#000";
-    ctx.fillRect(Math.random() * PXW, Math.random() * cv.height, 1.5, 1.5);
+    ctx.fillStyle = noise() > 0.5 ? "#fff" : "#000";
+    ctx.fillRect(noise() * PXW, noise() * cv.height, 1.5, 1.5);
   }
   ctx.globalAlpha = 1;
   const fast = plan.laneBands.find((b) => b.kind === "fast-lane")!;
@@ -134,12 +137,14 @@ function pitLaneMesh(plan: PitLanePlan): Mesh {
     const ny = Math.cos(c.heading);
     // path runs mid-lane; lane extends ±widthM/2 around it
     const half = widthM / 2;
-    positions[i * 6] = c.x - nx * half;
-    positions[i * 6 + 1] = c.y - ny * half;
-    positions[i * 6 + 2] = c.z;
-    positions[i * 6 + 3] = c.x + nx * half;
-    positions[i * 6 + 4] = c.y + ny * half;
-    positions[i * 6 + 5] = c.z;
+    const wA = planPointToWorld(c.x - nx * half, c.y - ny * half, c.z);
+    const wB = planPointToWorld(c.x + nx * half, c.y + ny * half, c.z);
+    positions[i * 6] = wA.x;
+    positions[i * 6 + 1] = wA.y;
+    positions[i * 6 + 2] = wA.z;
+    positions[i * 6 + 3] = wB.x;
+    positions[i * 6 + 4] = wB.y;
+    positions[i * 6 + 5] = wB.z;
     uvs[i * 4] = 0;
     uvs[i * 4 + 1] = c.s / lengthM;
     uvs[i * 4 + 2] = 1;
@@ -220,7 +225,14 @@ function pitWallGroup(plan: PitLanePlan): Group {
 }
 
 /** Build every facility mesh for the current plan. */
-export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: import("../core/facilities/types").GroundSurface | null = null): Group {
+export function buildFacilityMeshes(
+  plan: FacilityPlan,
+  track: Track,
+  ground: import("../core/facilities/types").GroundSurface | null = null,
+  /** ground WITHOUT facility pads — foundations reach THIS (else skirts
+   * sample their own pad and shrink to zero) */
+  rawGround: import("../core/facilities/types").GroundSurface | null = null,
+): Group {
   const group = new Group();
   group.name = "facilities";
   if (plan.pitLane) {
@@ -250,7 +262,7 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: im
     group.add(pitComplexMeshes(plan.pitComplex, track, { sStart: plan.site.sStart, side: plan.site.side }));
   }
   if (plan.foundations.length > 0) {
-    group.add(foundationMeshes(plan, ground));
+    group.add(foundationMeshes(plan, rawGround ?? ground));
   }
   if (plan.grandstands.length > 0) {
     group.add(grandstandMeshes(plan.grandstands));
@@ -585,16 +597,19 @@ const SEAT_FRAME = new MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.8, m
 const SEAT_COLORS = [0x2a5a9e, 0xc83a2a, 0x3a9a5a, 0xe8b23a, 0xe8e8e8];
 
 /**
- * One grandstand. Local frame per the orientation contract:
- *   local +X = longDir (along rows), local +Z = -frontDir (rows rise away
- *   from the track). Rows step up as they recede.
+ * One grandstand. Documented local frame (right-handed):
+ *   local +X = longDir (along seating rows)
+ *   local +Y = up
+ *   local +Z = frontDir (TOWARD the track)
+ * Rows therefore recede at NEGATIVE local Z and rise away from the track.
+ * Basis is orthonormal with determinant +1 (quaternion-safe) because
+ * longDir == perp(frontDir) in plan space.
  */
 function grandstandMesh(st: GrandstandPlan): Group {
   const g = new Group();
   const depth = st.rows * st.rowDepth;
-  // orientation basis: X = longDir, Z = -frontDir (into the stand)
   const x = new Vector3(st.longDir.x, 0, -st.longDir.y);
-  const zAxis = new Vector3(-st.frontDir.x, 0, st.frontDir.y);
+  const zAxis = new Vector3(st.frontDir.x, 0, -st.frontDir.y);
   const y = new Vector3(0, 1, 0);
   const m = new Matrix4().makeBasis(x, y, zAxis);
   const q = new Quaternion().setFromRotationMatrix(m);
@@ -620,7 +635,7 @@ function grandstandMesh(st: GrandstandPlan): Group {
     fascia.position.set(0, row0 * st.rowRise - 0.4 + tier * 0.9, -(row0 * st.rowDepth + tierDropback) + 0.2);
     g.add(fascia);
   }
-  // rear wall
+  // rear wall (furthest from the track: local -Z extreme)
   const rearH = st.rows * st.rowRise + 2.2;
   const rear = new Mesh(new BoxGeometry(st.width, rearH, 0.5), SEAT_FRAME);
   rear.position.set(0, rearH / 2 - 0.5, -(depth + st.tiers * 1.2 + 0.3));
@@ -631,15 +646,15 @@ function grandstandMesh(st: GrandstandPlan): Group {
     side.position.set((sx * st.width) / 2, (rearH * 0.85) / 2 - 0.4, -(depth / 2));
     g.add(side);
   }
-  // roof (cantilevered toward the track: front = local +z)
+  // roof: cantilevers TOWARD the track (positive local Z overhang)
   if (st.roof && st.roof !== "none") {
     const roofDepth = depth * 0.85 + 6;
     const roof = new Mesh(
       new BoxGeometry(st.width + 1.5, 0.28, roofDepth),
       st.roof === "tensile-canopy" || st.roof === "fabric" ? CANVAS_MAT : ROOF_MAT,
     );
-    roof.position.set(0, rearH + 1.4, -(depth / 2) + roofDepth * 0.18);
-    roof.rotation.x = st.roof === "cantilever" ? -0.07 : 0;
+    roof.position.set(0, rearH + 1.4, -depth + roofDepth / 2 - 1.2);
+    roof.rotation.x = st.roof === "cantilever" ? 0.07 : 0;
     roof.castShadow = true;
     g.add(roof);
     // roof support columns at the rear (cantilever logic: held from behind)

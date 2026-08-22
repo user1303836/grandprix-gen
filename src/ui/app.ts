@@ -345,12 +345,11 @@ export class App {
     void (async () => {
       try {
         const { planFacilities } = await import("../core/facilities/plan");
-        const { carveSampler } = await import("../core/terrain");
+        const { corridorCarve } = await import("../core/terrain");
         const { surfaceFromPlan } = await import("../core/world/synthesis");
         const ground = s.terrain
           ? {
-              elevationAt: (x: number, y: number) =>
-                carveSampler(s.terrain!, s.track!.samples, s.track!.carveMask, 40, 120, s.track!.carveInner)(x, y),
+              elevationAt: corridorCarve(s.terrain!, s.track!, 120),
               slopeAt: (x: number, y: number) => s.terrain!.slopeAt(x, y),
             }
           : s.track!.world
@@ -978,7 +977,10 @@ export class App {
       onFacilityParam: (k, v) => this.onFacilityParam(k, v),
       onRegenerateFacilities: () => this.regenerateFacilities(),
       onVehicle: (id) => this.onVehicle(id),
-      onDisplay: (patch) => this.store.set(patch, ...Object.keys(patch)),
+      onDisplay: (patch) => {
+        this.store.set(patch, ...Object.keys(patch));
+        if ("layers" in patch) this.view3d.applyLayerVisibility();
+      },
       onUndo: () => this.undo(),
       onRedo: () => this.redo(),
       onHistoryJump: (i) => this.onHistoryJump(i),

@@ -19,6 +19,18 @@ import {
 import type { Track } from "../core/types";
 import { FeatureColors } from "../core/character";
 import { civilKindAt } from "../core/civil";
+import { Matrix4, Quaternion, Vector3 } from "three";
+
+/** Quaternion whose local +X spans ACROSS the road (right-handed:
+ * X=across, Y=up, Z=tangent of travel). Use for gantries/bridges/banners. */
+function acrossTrackQuat(heading: number): Quaternion {
+  const tx = Math.cos(heading);
+  const tz = -Math.sin(heading); // world tangent (plan y -> world -z)
+  const nx = -Math.sin(heading);
+  const nz = -Math.cos(heading); // plan-left normal in world
+  const m = new Matrix4().makeBasis(new Vector3(nx, 0, nz), new Vector3(0, 1, 0), new Vector3(tx, 0, tz));
+  return new Quaternion().setFromRotationMatrix(m);
+}
 
 /** Shared wind time uniform (the view drives it every frame). */
 export const windUniform = { value: 0 };
@@ -184,8 +196,12 @@ function nearestGroundS(track: Track, s: number): number {
   return s;
 }
 
-export function buildFurniture(track: Track): Group {
+/** Seat function: the z an object should stand on at plan (x, y) near s. */
+export type FurnitureSeat = (x: number, y: number, s: number, fallbackZ: number) => number;
+
+export function buildFurniture(track: Track, seat?: FurnitureSeat): Group {
   const group = new Group();
+  const seatZ = (x: number, y: number, s: number, fallback: number): number => (seat ? seat(x, y, s, fallback) : fallback);
   const n = track.samples.length;
   const ds = track.ds;
   const rnd = seeded(track.seed ^ 0xf12);
@@ -206,7 +222,7 @@ export function buildFurniture(track: Track): Group {
       const smp = track.samples[i];
       const px = smp.x + nx * off;
       const py = smp.y + ny * off;
-      const pz = smp.z - off * Math.sin(smp.bank);
+      const pz = seatZ(px, py, s, smp.z - off * Math.sin(smp.bank));
       const post = new Mesh(postGeo, postMat);
       post.position.set(px, pz + 0.55, -py);
       group.add(post);
@@ -337,7 +353,7 @@ export function buildFurniture(track: Track): Group {
     const beamGeo = new BoxGeometry(w * 2, 1.15, 0.75);
     const beam = new Mesh(beamGeo, new MeshStandardMaterial({ map: makeGantryTexture(), roughness: 0.6 }));
     beam.position.set(f.x, f.z + 7.6, f.y);
-    beam.rotation.y = -f.heading;
+    beam.quaternion.copy(acrossTrackQuat(f.heading));
     beam.castShadow = true;
     group.add(beam);
     // start light bar: 5 lamps under the beam (red until the field is away)
@@ -350,10 +366,12 @@ export function buildFurniture(track: Track): Group {
         emissiveIntensity: 2.2,
       });
       const lamp = new Mesh(lampGeo, lampMat);
+      const ax = -Math.sin(f.heading);
+      const az = -Math.cos(f.heading);
       lamp.position.set(
-        f.x - Math.cos(f.heading) * (k - 2) * 0.85,
+        f.x + ax * (k - 2) * 0.85,
         f.z + 6.85,
-        -f.y - Math.sin(f.heading) * (k - 2) * 0.85,
+        -f.y + az * (k - 2) * 0.85,
       );
       lamp.rotation.y = -f.heading;
       lamp.name = `startlight_${k}`;
@@ -449,7 +467,7 @@ export function buildFurniture(track: Track): Group {
         const smp = track.samples[i];
         const px = smp.x + nx * off;
         const py = smp.y + ny * off;
-        const pz = smp.z - off * Math.sin(smp.bank);
+        const pz = seatZ(px, py, sAt, smp.z - off * Math.sin(smp.bank));
         // two-high stack, slight jitter so the wall looks handmade
         for (let lvl = 0; lvl < 2; lvl++) {
           const tire = new Mesh(tireGeo, (k + lvl) % 2 === 0 ? redMat : whiteMat);
@@ -499,7 +517,7 @@ export function buildFurniture(track: Track): Group {
       post2.position.set(px, pz + 1.3, -py);
       group.add(post2);
       const sign = new Mesh(new BoxGeometry(3.4, 1.0, 0.08), new MeshStandardMaterial({ map: tex, roughness: 0.7 }));
-      sign.position.set(px, pz + 2.9, -py);
+      sign.position.set(px, seatZ(px, py, sMid, pz) + 2.9, -py);
       sign.rotation.y = -smp.heading + (side > 0 ? Math.PI : 0);
       sign.castShadow = true;
       group.add(sign);
@@ -557,7 +575,9 @@ export function buildFurniture(track: Track): Group {
       const { nx, ny, off } = offsetOf(track, i, side, 9);
       const smp = track.samples[i];
       const hut = new Mesh(hutGeo, hutMat);
-      hut.position.set(smp.x + nx * off, smp.z + 1.1 - off * Math.sin(smp.bank), -smp.y - ny * off);
+      const hx = smp.x + nx * off;
+      const hy = smp.y + ny * off;
+      hut.position.set(hx, seatZ(hx, hy, i * ds, smp.z - off * Math.sin(smp.bank)) + 1.1, -hy);
       hut.castShadow = true;
       group.add(hut);
       const roof = new Mesh(new BoxGeometry(1.9, 0.18, 1.9), roofMat);

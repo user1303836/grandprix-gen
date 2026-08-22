@@ -87,6 +87,14 @@ export function planFacilities(
   for (const v of gst.violations) {
     violations.push({ kind: "stand-sightline", s: 0, detail: v });
   }
+  // reject stands that face away from their target or can't see it
+  gst.stands = gst.stands.filter((st) => {
+    if (st.facingDot < 0.5 || st.viewScore < 0.18) {
+      violations.push({ kind: "stand-facing", s: 0, detail: `suppressed ${st.id} (facing ${st.facingDot.toFixed(2)} / view ${st.viewScore.toFixed(2)})` });
+      return false;
+    }
+    return true;
+  });
 
   // ---- foundations (phase 5) -------------------------------------------------
   const foundations: import("./types").FoundationPlan[] = [];
@@ -112,20 +120,71 @@ export function planFacilities(
       });
     }
   }
+  // reject-policy: volumes that bury deeply or float far above ground are
+  // SUPPRESSED (not rendered with a warning). Their foundations go too.
+  {
+    const keep = new Set<string>();
+    for (const vol of complex.plan.volumes) {
+      const fdn = foundations.find((f) => f.id === vol.foundationId);
+      // synthetic flat ground reports zero range; keep those volumes
+      if (!fdn || (fdn.ground.max - fdn.ground.min === 0 && fdn.ground.mean === 0)) {
+        keep.add(vol.id);
+        continue;
+      }
+      const bury = fdn.ground.mean - vol.baseZ;
+      const float = vol.baseZ - fdn.ground.min;
+      if (bury > 3.5 || float > 24) {
+        violations.push({ kind: bury > 3.5 ? "building-terrain-penetration" : "building-unsupported", s: site.sStart, detail: `suppressed ${vol.id} (bury ${bury.toFixed(1)} / float ${float.toFixed(1)})` });
+        continue;
+      }
+      keep.add(vol.id);
+    }
+    complex.plan.volumes = complex.plan.volumes.filter((v) => keep.has(v.id));
+    complex.plan.garageBays = complex.plan.garageBays.filter((b) => keep.has(b.volumeId));
+    const keptFdnIds = new Set(complex.plan.volumes.map((v) => v.foundationId));
+    for (let i = foundations.length - 1; i >= 0; i--) {
+      const f = foundations[i];
+      if (f.id.startsWith("fdn-garage") || f.id.startsWith("fdn-tower") || f.id.startsWith("fdn-hospitality")) {
+        if (!keptFdnIds.has(f.id)) foundations.splice(i, 1);
+      }
+    }
+  }
 
   // ---- screens (generated content) ------------------------------------------
   const screens: import("./types").ScreenPlan[] = [];
   {
     const nScreens = Math.round(arch.screens[0] + (arch.screens[1] - arch.screens[0]) * identity.scale);
     const sign = site.side === "left" ? 1 : -1;
+    // screens live BEYOND the complex ends (never inside the building's
+    // depth band) and face across the track toward the main stand
+    const vols = complex.plan.volumes;
+    const collides = (x: number, y: number): boolean =>
+      vols.some((v) => {
+        const dx = x - v.cx;
+        const dy = y - v.cy;
+        const c = Math.cos(v.angleU);
+        const sN = Math.sin(v.angleU);
+        const lu = dx * c + dy * sN;
+        const lv = -dx * sN + dy * c;
+        return Math.abs(lu) < v.widthU / 2 + 6 && Math.abs(lv) < v.depthV / 2 + 6;
+      });
     for (let k = 0; k < nScreens; k++) {
-      const sPos = site.sStart + ((site.sEnd - site.sStart) * (k + 1)) / (nScreens + 1);
-      const p = sampleAt(track, sPos);
-      // on the pit side, facing ACROSS the track toward the main stand
-      const off = 30 + rnd() * 8;
+      // past the working section ends
+      const sPos = k % 2 === 0 ? site.sStart - 30 - k * 18 : site.sEnd + 30 + k * 18;
+      const p = sampleAt(track, ((sPos % track.length) + track.length) % track.length);
+      let off = 26;
+      let x = 0;
+      let y = 0;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        x = p.x + -Math.sin(p.heading) * sign * off;
+        y = p.y + Math.cos(p.heading) * sign * off;
+        if (!collides(x, y)) break;
+        off += 12;
+      }
+      if (collides(x, y)) continue;
       screens.push({
-        x: p.x + -Math.sin(p.heading) * sign * off,
-        y: p.y + Math.cos(p.heading) * sign * off,
+        x,
+        y,
         z: p.z,
         heading: p.heading + (sign > 0 ? -Math.PI / 2 : Math.PI / 2),
         title: `${track.identity?.namingFlavor === "alpine" ? "Alpen" : "Grand"} Prix · Lap Tower`,

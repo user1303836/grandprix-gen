@@ -90,8 +90,9 @@ import {
 import { sampleAt } from "../core/types";
 import { carBasisWorld, planToWorld, roadFrameAt } from "../core/roadFrame";
 import { makeFacilityCarve } from "../core/facilities/foundations";
-import { carveSampler, makeTrackProximity, type TerrainSurface } from "../core/terrain";
-import { buildWorldMeshes } from "./worldMeshes";
+import { corridorCarve, makeTrackProximity, type TerrainSurface } from "../core/terrain";
+import { Corridor } from "../core/corridor";
+import { buildWorldMeshes, waterfallTextures } from "./worldMeshes";
 import { surfaceFromPlan } from "../core/world/synthesis";
 import type { OsmBuilding } from "../core/osm";
 import { Rng } from "../core/prng";
@@ -296,7 +297,21 @@ export class View3D {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.maxPolarAngle = Math.PI * 0.495;
+    // slightly below horizontal is fine (cursor-zoom descends toward the
+    // pointed ground point); the clamp must not fight the dolly translation
+    this.controls.maxPolarAngle = Math.PI * 0.53;
+    // zoom toward the cursor: multiplicative dolly alone crawls at close
+    // range (per-notch motion ∝ current radius) — cursor zoom keeps the
+    // rate useful at every distance, and clamp the degenerate radii
+    this.controls.zoomToCursor = true;
+    this.controls.minDistance = 6;
+    this.controls.maxDistance = 30000;
+    // user input kills the intro swoop so it never fights the controls
+    const killSwoop = () => {
+      this.swoop = null;
+    };
+    this.renderer.domElement.addEventListener("pointerdown", killSwoop);
+    this.renderer.domElement.addEventListener("wheel", killSwoop, { passive: true });
     // the browser context menu steals right-drag pan gestures -- kill it
     this.renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
     this.setupHover();
@@ -470,41 +485,31 @@ export class View3D {
         wall.castShadow = true;
         this.trackGroup.add(wall);
       }
+      this.currentRawTerrain = state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null);
       this.addStartFinish(track);
       this.addStructureMeshes(track, state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null));
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
-      this.trackGroup.add(buildFurniture(track));
+      this.trackGroup.add(buildFurniture(track, (x, y, sPos, fallback) => this.furnitureSeat(track, x, y, sPos, fallback)));
       if (track.facilities) {
-        const baseGround: import("../core/facilities/types").GroundSurface | null = state.terrain
-          ? {
-              elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
-              slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
-            }
-          : track.world
-            ? (() => {
-                const ws = surfaceFromPlan(track.world);
-                return { elevationAt: (x: number, y: number) => ws.elevationAt(x, y), slopeAt: (x: number, y: number) => ws.slopeAt(x, y) };
-              })()
-            : null;
-        this.facilityGround = makeFacilityCarve(baseGround, track.facilities.foundations);
-        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround));
+        const rawSurf: TerrainSurface | null = state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null);
+        const fg = this.finalGround(track, rawSurf);
+        this.facilityGround = fg ? { elevationAt: fg } : null;
+        const corridorOnly = rawSurf ? { elevationAt: corridorCarve(rawSurf, track, 120) } : null;
+        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround, corridorOnly));
       } else {
         this.facilityGround = null;
       }
       this.addPuddles(track);
       this.maybeFitCamera(track, state.terrain);
       this.rebuildFloodlights();
+      this.applyLayerVisibility();
     }
 
     if (state.terrain && track) {
       // detailed carved site terrain
       const g = state.terrain;
-      let carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
-      if (track.facilities && track.facilities.foundations.length > 0) {
-        const fc = makeFacilityCarve({ elevationAt: carve }, track.facilities.foundations);
-        if (fc) carve = fc.elevationAt as typeof carve;
-      }
+      const carve = this.finalGround(track, g)!;
       // cell size well under the narrowest carved bench (~13 m in cuts)
       const span = Math.max(g.width, g.height) * g.resolution;
       const maxSide = Math.max(240, Math.min(720, Math.ceil(span / 9.5)));
@@ -522,7 +527,7 @@ export class View3D {
       // coarse triangles roof over the cut trenches the site mesh opens
       if (state.terrainContext) {
         const ctx = state.terrainContext;
-        const ctxCarve = carveSampler(ctx, track.samples, track.carveMask, 40, 120, track.carveInner);
+        const ctxCarve = this.finalGround(track, ctx)!;
         const ctxDrape = state.showSatellite ? state.imageryContext : null;
         const ctxMesh = this.terrainMesh(ctx, (x, y) => ctxCarve(x, y), 200, 0, null, ctxDrape);
         ctxMesh.position.y = -1.5; // site mesh wins the overlap
@@ -563,13 +568,14 @@ export class View3D {
         0,
       );
       this.trackGroup.add(this.valleyMist.mesh);
-      this.addTrees(state.terrain, track);
-      this.addGrassTufts(state.terrain, track);
-      this.addBoulders(state.terrain, track);
+      const scatterGround = this.finalGround(track, state.terrain)!;
+      this.addTrees(state.terrain, track, scatterGround);
+      this.addGrassTufts(state.terrain, track, scatterGround);
+      this.addBoulders(state.terrain, track, scatterGround);
       if (state.buildings && state.buildings.length > 0) {
         // seat buildings on the CARVED terrain so they don't float/sink
         // where the corridor flattens the ground
-        const carved = carveSampler(state.terrain, track.samples, track.carveMask, 40, 120, track.carveInner);
+        const carved = this.finalGround(track, state.terrain)!;
         this.trackGroup.add(this.buildingsMesh(state.buildings, carved));
         const win = this.buildingWindowsMesh(state.buildings, carved);
         if (win) {
@@ -584,13 +590,32 @@ export class View3D {
       // derived from the canonical WorldPlan
       const world = track.world;
       const surf = surfaceFromPlan(world);
-      const carve = carveSampler(surf, track.samples, track.carveMask, 40, 78, track.carveInner);
+      const carve = this.finalGround(track, surf)!;
+      // cull terrain quads inside the road-covered corridor (the road mesh
+      // owns road+kerb+runoff; terrain stays out so no triangle roofs it)
+      const corr = new Corridor(track);
+      const active = track.samples.filter((_, i) => !track.carveMask || track.carveMask[i] === 1);
+      const prox = makeTrackProximity(active);
+      const coveredAt = (i: number): number => {
+        const ph = corr.platformHalf(i);
+        return Math.max(ph.l, ph.r) - 1.2; // small overlap into the runoff edge
+      };
+      const corridorCull = (x: number, y: number): boolean => {
+        const cands = prox.within(x, y, 42);
+        for (const c of cands) {
+          // find the sample index via the map key (i carried by proximity)
+          const i = (c as { i?: number }).i ?? -1;
+          if (i >= 0 && c.d < coveredAt(i)) return true;
+        }
+        return false;
+      };
       const wg = buildWorldMeshes(world, track, {
         sunDir: this.sunDirection(),
         horizonColor: SKY_STYLES[this.dayTime].horizon,
         sunColor: SKY_STYLES[this.dayTime].sunColor,
         season: this.season,
         carve,
+        corridorCull,
       });
       this.trackGroup.add(wg);
       // atmosphere: cloud shadows + valley mist over the world
@@ -625,22 +650,15 @@ export class View3D {
       this.trackGroup.add(ground);
     }
 
-    // shadow camera covers the scene
-    const span = track ? estimateSpan(track) * 1.4 : 2000;
-    const s = span * 0.75;
-    this.sun.shadow.camera.left = -s;
-    this.sun.shadow.camera.right = s;
-    this.sun.shadow.camera.top = s;
-    this.sun.shadow.camera.bottom = -s;
+    // shadow camera: a tight window that follows the camera's interest
+    // point every frame (crisp shadows where you look, not 1 m blobs)
     this.sun.shadow.camera.far = 9000;
-    this.sun.shadow.camera.updateProjectionMatrix();
     if (track) {
       const c = track.samples[0];
       this.sun.target.position.set(c.x, c.z, -c.y);
-      const dir = this.sunDirection();
-      this.sun.position.set(c.x + dir.x * span * 1.5, c.z + Math.max(120, dir.y * span * 1.5), -c.y + dir.z * span * 1.5);
     }
     // fog scales with the site so overview shots don't wash out
+    const span = track ? estimateSpan(track) * 1.4 : 2000;
     const preset = SKY_PRESETS[this.dayTime];
     this.scene.fog = new Fog(preset.fogColor, span * preset.fogNearK, span * preset.fogFarK);
 
@@ -652,6 +670,34 @@ export class View3D {
       if (o instanceof Mesh && o.material instanceof MeshStandardMaterial) {
         o.material.envMapIntensity = intensity;
       }
+    });
+  }
+
+  /** Map an object name to its debug layer category. */
+  private layerOf(name: string): string | null {
+    if (!name) return null;
+    if (name === "facilities") return null; // container; children decide
+    if (name.startsWith("structure_pit-lane") || name === "pit-lane-ribbon" || name === "pit-wall") return "pitLane";
+    if (name === "pit-complex" || name.startsWith("screen")) return "pitComplex";
+    if (name === "grandstands") return "grandstands";
+    if (name === "facility-foundations") return "foundations";
+    if (name.startsWith("structure_")) return "structures";
+    if (name.startsWith("terrain") || name === "world-terrain" || name === "boundary" || name === "far-apron") return "terrain";
+    if (name.includes("trees") || name.includes("vegetation") || name === "grass-tufts" || name === "boulders") return "vegetation";
+    if (name.includes("landmark")) return "landmarks";
+    if (name === "crowd" || name === "catch-fence" || name === "facility-lamps" || name === "facility-lighting") return "furniture";
+    if (name.startsWith("asphalt") || name.startsWith("kerb") || name.startsWith("line") || name.startsWith("barrier")) return "track";
+    return null;
+  }
+
+  /** Apply object-category visibility toggles (cheap; no rebuild). */
+  applyLayerVisibility(): void {
+    const layers = this.state?.layers;
+    if (!layers) return;
+    const root = this.trackGroup ?? this.scene;
+    root.traverse((o) => {
+      const cat = this.layerOf(o.name);
+      if (cat) o.visible = layers[cat] !== false;
     });
   }
 
@@ -1143,6 +1189,7 @@ export class View3D {
   }
 
   private facilityGround: import("../core/facilities/types").GroundSurface | null = null;
+  private currentRawTerrain: TerrainSurface | null = null;
   private facilityLights: PointLight[] = [];
   private readonly basisM4 = new Matrix4();
   private readonly basisQ = new Quaternion();
@@ -1496,7 +1543,7 @@ export class View3D {
   }
 
   /** Instanced low-poly trees on moderate slopes outside the corridor. */
-  private addTrees(grid: TerrainSurface, track: Track): void {
+  private addTrees(grid: TerrainSurface, track: Track, groundFn?: (x: number, y: number) => number): void {
     const proximity = makeTrackProximity(track.samples);
     const rng = new Rng(track.seed ^ 0x7ee5);
     const conifers: { m: Matrix4; s: number }[] = [];
@@ -1507,7 +1554,7 @@ export class View3D {
       for (let ix = 2; ix < grid.width - 2; ix += step) {
         const x = grid.originX + (ix + rng.spread(0.5)) * grid.resolution;
         const y = grid.originY + (iy + rng.spread(0.5)) * grid.resolution;
-        const z = grid.elevationAt(x, y);
+        const z = groundFn ? groundFn(x, y) : grid.elevationAt(x, y);
         if (!Number.isFinite(z) || z < 3) continue;
         const slope = grid.slopeAt(x, y);
         if (slope > 0.42) continue;
@@ -1676,9 +1723,42 @@ export class View3D {
   }
 
   // ---------------------------------------------------- structures
+  /** Where a trackside object should stand: corridor surface inside the
+   * engineered envelope, final carved ground beyond it. */
+  private furnitureSeat(track: Track, x: number, y: number, sPos: number, fallback: number): number {
+    const corr = new Corridor(track);
+    const i = ((Math.round(sPos / track.ds) % track.samples.length) + track.samples.length) % track.samples.length;
+    const smp = track.samples[i];
+    const nx = -Math.sin(smp.heading);
+    const ny = Math.cos(smp.heading);
+    const off = (x - smp.x) * nx + (y - smp.y) * ny;
+    const ph = corr.platformHalf(i);
+    if (Math.abs(off) <= Math.max(ph.l, ph.r)) {
+      return corr.surface(sPos, off).z + 0.02;
+    }
+    const raw = this.currentRawTerrain;
+    if (raw) {
+      const carve = this.finalGround(track, raw);
+      if (carve) return carve(x, y) + 0.05;
+    }
+    return fallback;
+  }
+
+  /** The single final ground: raw terrain → corridor carve → facility pads. */
+  private finalGround(track: Track, raw: TerrainSurface | null): ((x: number, y: number) => number) | null {
+    if (!raw) return null;
+    let carve = corridorCarve(raw, track, 120);
+    if (track.facilities && track.facilities.foundations.length > 0) {
+      const fc = makeFacilityCarve({ elevationAt: carve }, track.facilities.foundations);
+      if (fc) carve = fc.elevationAt as typeof carve;
+    }
+    return carve;
+  }
+
   private addStructureMeshes(track: Track, terrain: TerrainSurface | null): void {
     if (!this.trackGroup) return;
-    const groundSampler = terrain ? (x: number, y: number) => terrain.elevationAt(x, y) : null;
+    const finalCarve = this.finalGround(track, terrain);
+    const groundSampler = finalCarve ?? (terrain ? (x: number, y: number) => terrain.elevationAt(x, y) : null);
     for (const part of buildStructureMeshes(track, groundSampler)) {
       this.trackGroup.add(this.structureMesh(part));
     }
@@ -1901,7 +1981,7 @@ export class View3D {
   }
 
   /** Boulders on steep slopes (they read as rock outcrops). */
-  private addBoulders(grid: TerrainSurface, track: Track): void {
+  private addBoulders(grid: TerrainSurface, track: Track, groundFn?: (x: number, y: number) => number): void {
     const proximity = makeTrackProximity(track.samples);
     const rng = new Rng(track.seed ^ 0xb01d);
     const spots: { m: Matrix4; shade: number }[] = [];
@@ -1981,7 +2061,7 @@ export class View3D {
   }
 
   /** Small instanced grass tufts hugging the corridor (close-up richness). */
-  private addGrassTufts(grid: TerrainSurface, track: Track): void {
+  private addGrassTufts(grid: TerrainSurface, track: Track, groundFn?: (x: number, y: number) => number): void {
     const rng = new Rng(track.seed ^ 0x6a55);
     const proximity = makeTrackProximity(track.samples);
     const spots: Matrix4[] = [];
@@ -1997,7 +2077,7 @@ export class View3D {
         const ny = Math.cos(smp.heading);
         const x = smp.x + nx * off + rng.spread(3);
         const y = smp.y + ny * off + rng.spread(3);
-        const z = grid.elevationAt(x, y);
+        const z = groundFn ? groundFn(x, y) : grid.elevationAt(x, y);
         if (!Number.isFinite(z)) continue;
         const near = proximity.nearest(x, y, 6);
         if (near && near.d < 5.5) continue; // never in the road
@@ -2180,9 +2260,34 @@ export class View3D {
       this.camera.up.set(0, 1, 0);
       this.controls.enabled = true;
       this.controls.update();
+      // soft floor: cursor-zoom may not dive far under the world
+      if (state.track) {
+        let floor = -40;
+        if (state.terrain) floor = state.terrain.minElevation - 25;
+        else if (state.track.world?.grid) floor = -60; // world grid is near z≈0; allow the diorama edge view
+        if (this.camera.position.y < floor) this.camera.position.y += (floor - this.camera.position.y) * 0.5;
+      }
       this.updateLabels(dt);
       this.updateHover(performance.now());
       this.updateFloodlights();
+    }
+    // tight follow shadow frustum around the view target
+    {
+      const focus = this.driveActive && state.track
+        ? (() => { const p = sampleAt(state.track, this.driveS); return new Vector3(p.x, p.z, -p.y); })()
+        : this.controls.target;
+      const focusRadius = Math.min(420, Math.max(180, this.camera.position.distanceTo(focus) * 1.1));
+      const cam = this.sun.shadow.camera;
+      cam.left = -focusRadius;
+      cam.right = focusRadius;
+      cam.top = focusRadius;
+      cam.bottom = -focusRadius;
+      cam.near = 1;
+      cam.far = 5000;
+      this.sun.target.position.copy(focus);
+      this.sun.position.copy(focus).add(this.sunDirection().multiplyScalar(2500));
+      this.sun.target.updateMatrixWorld();
+      cam.updateProjectionMatrix();
     }
     const tNow = performance.now() / 1000;
     this.sky.setPosition(this.camera.position.x, this.camera.position.y, this.camera.position.z);
@@ -2194,6 +2299,7 @@ export class View3D {
     this.valleyMist.lerpStrength(mistTarget, Math.min(1, dt));
     this.updateFlare();
     this.windTime.value = tNow;
+    for (const tex of waterfallTextures) tex.offset.y = -tNow * 0.9;
     windUniform.value = tNow;
     this.updateWetness(dt);
     this.spray.update(dt);

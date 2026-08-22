@@ -22,6 +22,7 @@
 
 import type { Track } from "./types";
 import { sampleAt } from "./types";
+import { planVectorToWorld } from "./planWorld";
 
 export interface Vec3 {
   x: number;
@@ -102,9 +103,10 @@ export function roadFrameAt(track: Track, s: number): RoadFrame {
   };
 }
 
-/** Plan-space vector → three.js world vector (x, zUp, -yPlan). */
+/** Plan-space vector → three.js world vector (x, zUp, -yPlan).
+ * Canonical implementation lives in planWorld.ts — re-exported here. */
 export function planToWorld(v: Vec3): Vec3 {
-  return { x: v.x, y: v.z, z: -v.y };
+  return planVectorToWorld(v.x, v.y, v.z);
 }
 
 /**

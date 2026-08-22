@@ -4,7 +4,7 @@
  */
 
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
-import { carveSampler, type TerrainSurface } from "../core/terrain";
+import { corridorCarve, type TerrainSurface } from "../core/terrain";
 import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
 import { buildFacilityMeshParts } from "./facilityMesh";
 import { worldExportParts } from "../core/world/exportGeometry";
@@ -78,7 +78,7 @@ export function trackToObj(track: Track, opts: ObjOptions = {}): string {
     const extent = opts.terrainExtent ?? Math.max(g.width, g.height) * g.resolution;
     const nx = Math.min(256, g.width);
     const ny = Math.min(256, g.height);
-    const sampler = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+    const sampler = corridorCarve(g, track, 120);
     const mesh2 = buildGridMesh(
       sampler,
       g.originX,

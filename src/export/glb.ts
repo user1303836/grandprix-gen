@@ -14,7 +14,7 @@ import {
 } from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
-import { carveSampler, type TerrainSurface } from "../core/terrain";
+import { corridorCarve, type TerrainSurface } from "../core/terrain";
 import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
 import { buildFacilityMeshParts } from "./facilityMesh";
 import type { Track } from "../core/types";
@@ -149,7 +149,7 @@ export async function trackToGlb(
     const g = terrain;
     const maxSide = 256;
     const strideT = Math.max(1, Math.floor(Math.max(g.width, g.height) / maxSide));
-    const sampler = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+    const sampler = corridorCarve(g, track, 120);
     const gm = buildGridMesh(
       sampler,
       g.originX,
