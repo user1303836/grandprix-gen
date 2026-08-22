@@ -87,6 +87,7 @@ import {
 } from "../core/character";
 import { sampleAt } from "../core/types";
 import { carBasisWorld, planToWorld, roadFrameAt } from "../core/roadFrame";
+import { makeFacilityCarve } from "../core/facilities/foundations";
 import { carveSampler, makeTrackProximity, type TerrainGrid } from "../core/terrain";
 import type { OsmBuilding } from "../core/osm";
 import { Rng } from "../core/prng";
@@ -471,13 +472,18 @@ export class View3D {
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
       if (track.facilities) {
-        const fGround = state.terrain
-          ? {
-              elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
-              slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
-            }
+        this.facilityGround = state.terrain
+          ? makeFacilityCarve(
+              {
+                elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
+                slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
+              },
+              track.facilities.foundations,
+            )
           : null;
-        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, fGround));
+        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround));
+      } else {
+        this.facilityGround = null;
       }
       this.addPuddles(track);
       this.maybeFitCamera(track, state.terrain);
@@ -487,7 +493,11 @@ export class View3D {
     if (state.terrain && track) {
       // detailed carved site terrain
       const g = state.terrain;
-      const carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+      let carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+      if (track.facilities && track.facilities.foundations.length > 0) {
+        const fc = makeFacilityCarve({ elevationAt: carve }, track.facilities.foundations);
+        if (fc) carve = fc.elevationAt as typeof carve;
+      }
       // cell size well under the narrowest carved bench (~13 m in cuts)
       const span = Math.max(g.width, g.height) * g.resolution;
       const maxSide = Math.max(240, Math.min(720, Math.ceil(span / 9.5)));
@@ -1061,6 +1071,7 @@ export class View3D {
     }
   }
 
+  private facilityGround: import("../core/facilities/types").GroundSurface | null = null;
   private readonly basisM4 = new Matrix4();
   private readonly basisQ = new Quaternion();
   /** Orient a car from the shared 3D road frame (no Euler guessing). */

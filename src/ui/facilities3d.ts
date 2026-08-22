@@ -233,6 +233,9 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: im
   if (plan.foundations.length > 0) {
     group.add(foundationMeshes(plan, ground));
   }
+  if (plan.grandstands.length > 0) {
+    group.add(grandstandMeshes(plan.grandstands));
+  }
   return group;
 }
 
@@ -543,5 +546,101 @@ export function foundationMeshes(plan: import("../core/facilities/types").Facili
   const g = new Group();
   g.name = "facility-foundations";
   for (const f of plan.foundations) g.add(foundationMesh(f, ground));
+  return g;
+}
+
+// ============================================================ grandstands
+
+import type { GrandstandPlan } from "../core/facilities/types";
+
+const SEAT_FRAME = new MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.8, metalness: 0.2 });
+const SEAT_COLORS = [0x2a5a9e, 0xc83a2a, 0x3a9a5a, 0xe8b23a, 0xe8e8e8];
+
+/**
+ * One grandstand. Local frame per the orientation contract:
+ *   local +X = longDir (along rows), local +Z = -frontDir (rows rise away
+ *   from the track). Rows step up as they recede.
+ */
+function grandstandMesh(st: GrandstandPlan): Group {
+  const g = new Group();
+  const depth = st.rows * st.rowDepth;
+  // orientation basis: X = longDir, Z = -frontDir (into the stand)
+  const x = new Vector3(st.longDir.x, 0, -st.longDir.y);
+  const zAxis = new Vector3(-st.frontDir.x, 0, st.frontDir.y);
+  const y = new Vector3(0, 1, 0);
+  const m = new Matrix4().makeBasis(x, y, zAxis);
+  const q = new Quaternion().setFromRotationMatrix(m);
+
+  // stepped seating decks (merged boxes per tier, not per row)
+  const deckRows = st.rows;
+  const seatMat = new MeshStandardMaterial({ color: SEAT_COLORS[st.id.length % SEAT_COLORS.length], roughness: 0.85 });
+  for (let tier = 0; tier < st.tiers; tier++) {
+    const tierRows = Math.ceil(deckRows / st.tiers);
+    const row0 = tier * tierRows;
+    const rowsHere = Math.min(tierRows, deckRows - row0);
+    if (rowsHere <= 0) continue;
+    const tierDropback = tier * 1.2; // upper tier starts further back
+    for (let r = 0; r < rowsHere; r++) {
+      const rr = row0 + r;
+      const step = new Mesh(new BoxGeometry(st.width, 0.32, st.rowDepth * 0.94), rr % 2 === 0 ? seatMat : SEAT_FRAME);
+      step.position.set(0, rr * st.rowRise + 0.16 + tier * 0.9, -(rr * st.rowDepth + tierDropback));
+      step.castShadow = false;
+      g.add(step);
+    }
+    // tier fascia (structural face under each tier)
+    const fascia = new Mesh(new BoxGeometry(st.width, 1.1, 0.4), SEAT_FRAME);
+    fascia.position.set(0, row0 * st.rowRise - 0.4 + tier * 0.9, -(row0 * st.rowDepth + tierDropback) + 0.2);
+    g.add(fascia);
+  }
+  // rear wall
+  const rearH = st.rows * st.rowRise + 2.2;
+  const rear = new Mesh(new BoxGeometry(st.width, rearH, 0.5), SEAT_FRAME);
+  rear.position.set(0, rearH / 2 - 0.5, -(depth + st.tiers * 1.2 + 0.3));
+  g.add(rear);
+  // side walls
+  for (const sx of [-1, 1]) {
+    const side = new Mesh(new BoxGeometry(0.4, rearH * 0.85, depth * 0.96), SEAT_FRAME);
+    side.position.set((sx * st.width) / 2, (rearH * 0.85) / 2 - 0.4, -(depth / 2));
+    g.add(side);
+  }
+  // roof (cantilevered toward the track: front = local +z)
+  if (st.roof && st.roof !== "none") {
+    const roofDepth = depth * 0.85 + 6;
+    const roof = new Mesh(
+      new BoxGeometry(st.width + 1.5, 0.28, roofDepth),
+      st.roof === "tensile-canopy" || st.roof === "fabric" ? CANVAS_MAT : ROOF_MAT,
+    );
+    roof.position.set(0, rearH + 1.4, -(depth / 2) + roofDepth * 0.18);
+    roof.rotation.x = st.roof === "cantilever" ? -0.07 : 0;
+    roof.castShadow = true;
+    g.add(roof);
+    // roof support columns at the rear (cantilever logic: held from behind)
+    for (let k = 0; k <= 4; k++) {
+      const col = new Mesh(new CylinderGeometry(0.22, 0.22, rearH + 1.4, 8), SEAT_FRAME);
+      col.position.set(-st.width / 2 + (st.width * k) / 4, (rearH + 1.4) / 2 - 0.5, -(depth + st.tiers * 1.2));
+      g.add(col);
+    }
+  }
+  g.position.set(st.origin.x, st.origin.z, -st.origin.y);
+  g.quaternion.copy(q);
+  return g;
+}
+
+/** All grandstand meshes + debug front arrows. */
+export function grandstandMeshes(stands: GrandstandPlan[], debug = false): Group {
+  const g = new Group();
+  g.name = "grandstands";
+  for (const st of stands) {
+    g.add(grandstandMesh(st));
+    if (debug) {
+      // front-direction debug arrow
+      const arrowGeo = new CylinderGeometry(0.15, 0.15, 14, 6);
+      const arrow = new Mesh(arrowGeo, new MeshStandardMaterial({ color: 0xff2a2a }));
+      arrow.position.set(st.origin.x + st.frontDir.x * 8, st.origin.z + 6, -(st.origin.y + st.frontDir.y * 8));
+      arrow.rotation.z = Math.PI / 2;
+      arrow.rotation.y = -Math.atan2(st.frontDir.y, st.frontDir.x);
+      g.add(arrow);
+    }
+  }
   return g;
 }

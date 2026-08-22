@@ -134,3 +134,63 @@ export function supportDepths(f: FoundationPlan, ground: GroundSurface | null): 
     return g === null || g === undefined ? 0 : Math.max(0, s.topZ - g);
   });
 }
+
+// ---------------------------------------------------------------- pads
+
+/**
+ * Cut-and-fill facility pads: inside a foundation footprint the ground is
+ * flattened to the foundation datum (blended over the margin). This is the
+ * Stage-B terrain fitting — buildings then sit ON the ground.
+ */
+export function makeFacilityCarve(
+  base: GroundSurface | null,
+  foundations: FoundationPlan[],
+  margin = 9,
+): GroundSurface | null {
+  if (!base || foundations.length === 0) return base;
+  const pads = foundations.map((f) => {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of f.footprint) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    return { f, minX, minY, maxX, maxY };
+  });
+  const distToPoly = (x: number, y: number, poly: { x: number; y: number }[]): number => {
+    if (pointInPolygon({ x, y }, poly)) return 0;
+    let best = Infinity;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const t = Math.max(0, Math.min(1, ((x - a.x) * abx + (y - a.y) * aby) / Math.max(1e-6, abx * abx + aby * aby)));
+      const dx = x - (a.x + abx * t);
+      const dy = y - (a.y + aby * t);
+      best = Math.min(best, Math.hypot(dx, dy));
+    }
+    return best;
+  };
+  return {
+    elevationAt(x: number, y: number): number | null {
+      const g = base.elevationAt(x, y);
+      if (g === null) return null;
+      for (const p of pads) {
+        if (x < p.minX - margin || x > p.maxX + margin || y < p.minY - margin || y > p.maxY + margin) continue;
+        const d = distToPoly(x, y, p.f.footprint);
+        if (d <= 0) return p.f.datumZ[0];
+        if (d < margin) {
+          const t = d / margin;
+          return p.f.datumZ[0] * (1 - t) + g * t;
+        }
+      }
+      return g;
+    },
+    slopeAt: base.slopeAt ? (x: number, y: number) => base.slopeAt!(x, y) : undefined,
+  };
+}

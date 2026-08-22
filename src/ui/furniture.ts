@@ -382,7 +382,7 @@ export function buildFurniture(track: Track): Group {
   }
 
   // ---------- grandstands near the main straight -----------------------------
-  {
+  if (!(track.facilities?.grandstands?.length)) {
     const seatTex = makeStandTexture(track.seed);
     seatTex.wrapS = seatTex.wrapT = 1000; // RepeatWrapping
     seatTex.repeat.set(7, 1);

@@ -10,6 +10,7 @@ import { sampleAt, type Track } from "../types";
 import { rollFacilityIdentity } from "./identity";
 import { buildPitComplex } from "./pitComplex";
 import { chooseFoundation, footprintStats, polygonOfRect } from "./foundations";
+import { buildGrandstands } from "./grandstands";
 import { buildPitLane } from "./pitLane";
 import { selectFacilitySite } from "./siteSelection";
 import {
@@ -79,6 +80,12 @@ export function planFacilities(
     violations.push({ kind: "building-unsupported", s: 0, detail: v });
   }
 
+  // ---- grandstands (phase 6) -------------------------------------------------
+  const gst = buildGrandstands(track, ground, site, arch, identity, controls.seed);
+  for (const v of gst.violations) {
+    violations.push({ kind: "stand-sightline", s: 0, detail: v });
+  }
+
   // ---- foundations (phase 5) -------------------------------------------------
   const foundations: import("./types").FoundationPlan[] = [];
   for (const vol of complex.plan.volumes) {
@@ -130,8 +137,8 @@ export function planFacilities(
     site,
     pitLane: pit.plan,
     pitComplex: complex.plan,
-    grandstands: [],
-    foundations,
+    grandstands: gst.stands,
+    foundations: [...foundations, ...gst.foundations],
     lighting: { anchors: [], realLightIndices: [] },
     reservation,
     feasible: violations.filter((v) => v.kind === "pitlane-topology").length === 0,
