@@ -43,8 +43,10 @@ docs/facilities-reference-catalog.md   34-circuit research corpus + sources
   surface** so foundation stats match what you render.
 - **Stage-A reservation** — `FacilityPlan.reservation`:
   `developedPolygons` (no trees/rocks/landmarks), `vegetationExclusionPolygons`,
-  `preferredElevationBands`, `requiredAccessCorridors`. Consume these BEFORE
-  final vegetation/landmark placement.
+  `preferredElevationBands`, `requiredAccessCorridors`. **Wired** as of the
+  merge: `buildVegetation` in `src/ui/worldMeshes.ts` filters world trees
+  against `vegetationExclusionPolygons`. World planners should ALSO consume
+  the polygons during placement (cheaper than filtering instances).
 - **Stage-B pads** — `makeFacilityCarve(base, foundations)` returns a
   GroundSurface where every foundation footprint is flattened to its datum
   (9 m blend). Apply it over your carved surface so buildings sit on ground.

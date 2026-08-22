@@ -476,15 +476,18 @@ export class View3D {
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
       if (track.facilities) {
-        this.facilityGround = state.terrain
-          ? makeFacilityCarve(
-              {
-                elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
-                slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
-              },
-              track.facilities.foundations,
-            )
-          : null;
+        const baseGround: import("../core/facilities/types").GroundSurface | null = state.terrain
+          ? {
+              elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
+              slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
+            }
+          : track.world
+            ? (() => {
+                const ws = surfaceFromPlan(track.world);
+                return { elevationAt: (x: number, y: number) => ws.elevationAt(x, y), slopeAt: (x: number, y: number) => ws.slopeAt(x, y) };
+              })()
+            : null;
+        this.facilityGround = makeFacilityCarve(baseGround, track.facilities.foundations);
         this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround));
       } else {
         this.facilityGround = null;

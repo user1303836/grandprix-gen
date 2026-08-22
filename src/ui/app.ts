@@ -346,13 +346,22 @@ export class App {
       try {
         const { planFacilities } = await import("../core/facilities/plan");
         const { carveSampler } = await import("../core/terrain");
+        const { surfaceFromPlan } = await import("../core/world/synthesis");
         const ground = s.terrain
           ? {
               elevationAt: (x: number, y: number) =>
                 carveSampler(s.terrain!, s.track!.samples, s.track!.carveMask, 40, 120, s.track!.carveInner)(x, y),
               slopeAt: (x: number, y: number) => s.terrain!.slopeAt(x, y),
             }
-          : null;
+          : s.track!.world
+            ? (() => {
+                const ws = surfaceFromPlan(s.track!.world!);
+                return {
+                  elevationAt: (x: number, y: number) => ws.elevationAt(x, y),
+                  slopeAt: (x: number, y: number) => ws.slopeAt(x, y),
+                };
+              })()
+            : null;
         const plan = planFacilities(s.track!, ground, s.facility);
         const track = { ...s.track!, facilities: plan };
         this.store.set({ track }, "track");
