@@ -10,7 +10,6 @@ import { defaultParams, type Track } from "../src/core/types";
 import { Rng } from "../src/core/prng";
 import { surfaceFromPlan } from "../src/core/world/synthesis";
 import { roleAt } from "../src/core/world/relationships";
-import { worldExportParts } from "../src/core/world/exportGeometry";
 import { trackToObj } from "../src/export/obj";
 import { makeTrackProximity } from "../src/core/terrain";
 import type { EnvironmentParams } from "../src/core/world/types";
