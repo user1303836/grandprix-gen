@@ -9,6 +9,7 @@ import { mulberry32 } from "../prng";
 import { sampleAt, type Track } from "../types";
 import { rollFacilityIdentity } from "./identity";
 import { buildPitComplex } from "./pitComplex";
+import { chooseFoundation, footprintStats, polygonOfRect } from "./foundations";
 import { buildPitLane } from "./pitLane";
 import { selectFacilitySite } from "./siteSelection";
 import {
@@ -78,6 +79,31 @@ export function planFacilities(
     violations.push({ kind: "building-unsupported", s: 0, detail: v });
   }
 
+  // ---- foundations (phase 5) -------------------------------------------------
+  const foundations: import("./types").FoundationPlan[] = [];
+  for (const vol of complex.plan.volumes) {
+    const fp = polygonOfRect(vol.cx, vol.cy, vol.widthU / 2 + 1, vol.depthV / 2 + 1, vol.angleU);
+    const stats = footprintStats(ground, fp);
+    const fdn = chooseFoundation(vol.foundationId, fp, stats, vol.baseZ, identity.permanence === "temporary" ? "temporary-footings" : undefined);
+    foundations.push(fdn);
+    // penetration check: datum far below ground mean = burial (report, never offset-hide)
+    if (stats.samples > 0 && vol.baseZ < stats.mean - 1.2) {
+      violations.push({
+        kind: "building-terrain-penetration",
+        s: site.sStart,
+        detail: `${vol.id} datum ${vol.baseZ.toFixed(1)} is ${(stats.mean - vol.baseZ).toFixed(1)}m below ground mean`,
+      });
+    }
+    // tall supports check
+    if (stats.samples > 0 && vol.baseZ - stats.min > 18) {
+      violations.push({
+        kind: "building-unsupported",
+        s: site.sStart,
+        detail: `${vol.id} floats ${(vol.baseZ - stats.min).toFixed(1)}m over the low side`,
+      });
+    }
+  }
+
   // ---- reservation polygons (Stage A contract) -----------------------------
   const buildingDepth = arch.depth[0] + (arch.depth[1] - arch.depth[0]) * 0.5;
   const pitHalfW = pit.plan.width;
@@ -105,7 +131,7 @@ export function planFacilities(
     pitLane: pit.plan,
     pitComplex: complex.plan,
     grandstands: [],
-    foundations: [],
+    foundations,
     lighting: { anchors: [], realLightIndices: [] },
     reservation,
     feasible: violations.filter((v) => v.kind === "pitlane-topology").length === 0,

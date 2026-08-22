@@ -129,6 +129,25 @@ export function buildPitLane(
     zRaw.push(p.z);
     centerline.push({ s: pitS, x, y, z: p.z, heading: p.heading, kappa: 0, trackS });
   }
+  // smooth plan positions (kills resampling kinks at blend boundaries)
+  {
+    const w = 3; // ~12 m
+    const xs = centerline.map((c) => c.x);
+    const ys = centerline.map((c) => c.y);
+    for (let k = 0; k < centerline.length; k++) {
+      let ax = 0;
+      let ay = 0;
+      let cnt = 0;
+      for (let j = -w; j <= w; j++) {
+        const idx = Math.min(centerline.length - 1, Math.max(0, k + j));
+        ax += xs[idx];
+        ay += ys[idx];
+        cnt++;
+      }
+      centerline[k].x = ax / cnt;
+      centerline[k].y = ay / cnt;
+    }
+  }
   // headings from the path itself
   for (let k = 0; k < centerline.length; k++) {
     const a = centerline[Math.max(0, k - 1)];
@@ -139,7 +158,7 @@ export function buildPitLane(
     centerline[k].kappa = dh / ds;
   }
   // z: gentle own grade — heavy smoothing so the lane never warps per-sample
-  const win = Math.max(3, Math.round(40 / step));
+  const win = Math.max(3, Math.round(90 / step));
   for (let k = 0; k < centerline.length; k++) {
     let acc = 0;
     let cnt = 0;
@@ -219,11 +238,13 @@ export function buildPitLane(
       break;
     }
   }
-  // 2. grade
+  // 2. grade: the lane legitimately follows the main-straight grade; flag
+  // only excess over the track's own grade (and never below a sanity cap)
   for (let k = 4; k < centerline.length; k += 4) {
     const g = Math.abs(centerline[k].z - centerline[k - 4].z) / Math.max(1, centerline[k].s - centerline[k - 4].s);
-    if (g > 0.07) {
-      violations.push(`pit path grade ${(g * 100).toFixed(1)}% at s=${centerline[k].s.toFixed(0)}`);
+    const tg = Math.abs(gradeAt(track, centerline[k].trackS));
+    if (g > Math.max(0.07, tg + 0.025)) {
+      violations.push(`pit path grade ${(g * 100).toFixed(1)}% exceeds track grade ${(tg * 100).toFixed(1)}% at s=${centerline[k].s.toFixed(0)}`);
       break;
     }
   }

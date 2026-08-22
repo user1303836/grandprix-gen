@@ -471,7 +471,13 @@ export class View3D {
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
       if (track.facilities) {
-        this.trackGroup.add(buildFacilityMeshes(track.facilities, track));
+        const fGround = state.terrain
+          ? {
+              elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
+              slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
+            }
+          : null;
+        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, fGround));
       }
       this.addPuddles(track);
       this.maybeFitCamera(track, state.terrain);

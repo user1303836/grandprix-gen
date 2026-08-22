@@ -19,8 +19,10 @@ interface Candidate {
   meanAbsGrade: number;
 }
 
-/** Straight-ish windows (low curvature, gentle grade) of at least minLen. */
-export function findStraightWindows(track: Track, minLen = 300): Candidate[] {
+/** Straight-ish windows (low curvature, gentle grade) of at least minLen.
+ * Thresholds adapt to the track's own grade/curvature distribution so a
+ * mountain circuit still yields its flattest candidates. */
+export function findStraightWindows(track: Track, minLen = 300, kappaLimit?: number): Candidate[] {
   const n = track.samples.length;
   const ds = track.ds;
   const out: Candidate[] = [];
@@ -33,8 +35,13 @@ export function findStraightWindows(track: Track, minLen = 300): Candidate[] {
     const b = track.samples[(i + 1) % n];
     return Math.abs(b.z - a.z) / ds;
   };
+  // adaptive grade limit: the 25th-percentile sample grade, clamped
+  const grades = Array.from({ length: n }, (_, i) => gradeAt(i)).sort((a, b) => a - b);
+  const p25 = grades[Math.floor(n * 0.25)] ?? 0.02;
+  const gradeLimit = Math.min(0.08, Math.max(0.03, p25 * 1.35));
+  const kLim = kappaLimit ?? 0.0022;
   for (let i = 0; i <= n; i++) {
-    const ok = i < n && kappaAt(i) < 0.0016 && gradeAt(i) < 0.035;
+    const ok = i < n && kappaAt(i) < kLim && gradeAt(i) < gradeLimit;
     if (ok && runStart < 0) {
       runStart = i;
       kSum = 0;
@@ -59,6 +66,31 @@ export function findStraightWindows(track: Track, minLen = 300): Candidate[] {
     }
   }
   return out;
+}
+
+/** Trim a window to its longest contiguous at-grade sub-range.
+ * Returns null when no ≥ minLen at-grade part exists. */
+export function shrinkToAtGrade(track: Track, sStart: number, sEnd: number, minLen = 90): { sStart: number; sEnd: number } | null {
+  if (!track.civil) return { sStart, sEnd };
+  const step = 8;
+  let bestStart = -1;
+  let bestEnd = -1;
+  let runStart = -1;
+  for (let s = sStart; s <= sEnd; s += step) {
+    const k = civilKindAt(track.civil.spans, s, track.length);
+    const ok = !["short-bridge", "viaduct", "tunnel", "gallery"].includes(k);
+    if (ok && runStart < 0) runStart = s;
+    if ((!ok || s + step > sEnd) && runStart >= 0) {
+      const runEnd = s;
+      if (runEnd - runStart > bestEnd - bestStart) {
+        bestStart = runStart;
+        bestEnd = runEnd;
+      }
+      runStart = -1;
+    }
+  }
+  if (bestStart < 0 || bestEnd - bestStart < minLen) return null;
+  return { sStart: bestStart, sEnd: bestEnd };
 }
 
 /** How much of the window sits on elevated/underground civil spans (0..1). */
@@ -126,7 +158,12 @@ export function selectFacilitySite(
 ): FacilitySitePlan | null {
   const rejected: FacilitySitePlan["rejected"] = [];
   const rnd = mulberry32(facilitySeed ^ 0x51e);
-  const windows = findStraightWindows(track, Math.min(needLen, 260));
+  let windows = findStraightWindows(track, Math.min(needLen, 260));
+  if (windows.length === 0) windows = findStraightWindows(track, 200);
+  if (windows.length === 0) windows = findStraightWindows(track, 150);
+  // gently curving pit straights are real (Interlagos, Suzuka): relaxed tier
+  if (windows.length === 0) windows = findStraightWindows(track, 140, 0.004);
+  if (windows.length === 0) windows = findStraightWindows(track, 100, 0.004);
   if (windows.length === 0) return null;
 
   // s=0 currently hosts the start/finish; prefer the window containing it,
@@ -134,10 +171,6 @@ export function selectFacilitySite(
   let best: { c: Candidate; side: "left" | "right"; score: number } | null = null;
   for (const c of windows) {
     const structF = structureFraction(track, c.sStart, c.sEnd);
-    if (structF > 0.5) {
-      rejected.push({ sStart: c.sStart, sEnd: c.sEnd, side: "left", reason: `structure ${(structF * 100) | 0}%` });
-      continue;
-    }
     for (const side of ["left", "right"] as const) {
       const land = landScore(track, ground, c.sStart, c.sEnd, side);
       const straightScore = Math.max(0, 1 - c.meanAbsKappa / 0.0016) * 0.35;
@@ -147,9 +180,11 @@ export function selectFacilitySite(
       const containsSF = c.sStart <= 40 || c.sEnd >= track.length - 40 ? 0.12 : 0;
       const jitter = rnd() * 0.03;
       const score = straightScore + gradeScore + structScore + lenScore + containsSF + land.score * 0.28 + jitter;
+      // keep every scored candidate; the best one wins even below the
+      // ideal threshold (the prompt's fallback chain: smaller/compact
+      // facilities on the least-bad site rather than silent floating)
       if (score < 0.42) {
         rejected.push({ sStart: c.sStart, sEnd: c.sEnd, side, reason: `score ${score.toFixed(2)} (${land.reason})` });
-        continue;
       }
       if (!best || score > best.score) best = { c, side, score };
     }
@@ -158,13 +193,39 @@ export function selectFacilitySite(
     for (const c of windows) rejected.push({ sStart: c.sStart, sEnd: c.sEnd, side: "left", reason: "all sides failed land/structure" });
     return null;
   }
-  return {
-    sStart: best.c.sStart,
-    sEnd: best.c.sEnd,
-    side: best.side,
-    score: Math.min(1, best.score),
-    rejected,
-  };
+  // never put a permanent pit complex on a structure: trim the window to
+  // its longest at-grade part; if nothing remains, try the next candidates
+  // candidates in score order; first one with a usable at-grade part wins
+  const all: { c: Candidate; side: "left" | "right"; score: number }[] = [];
+  for (const c of windows) {
+    const structF2 = structureFraction(track, c.sStart, c.sEnd);
+    for (const side of ["left", "right"] as const) {
+      const land = landScore(track, ground, c.sStart, c.sEnd, side);
+      const score =
+        Math.max(0, 1 - c.meanAbsKappa / 0.0022) * 0.3 +
+        Math.max(0, 1 - c.meanAbsGrade / 0.06) * 0.15 +
+        (1 - structF2) * 0.22 +
+        Math.min(1, c.lengthM / (needLen * 1.8)) * 0.08 +
+        (c.sStart <= 40 || c.sEnd >= track.length - 40 ? 0.1 : 0) +
+        land.score * 0.24;
+      all.push({ c, side, score });
+    }
+  }
+  all.sort((a, b) => b.score - a.score);
+  for (const cand of all) {
+    const trimmed = shrinkToAtGrade(track, cand.c.sStart, cand.c.sEnd);
+    if (trimmed) {
+      return {
+        sStart: trimmed.sStart,
+        sEnd: trimmed.sEnd,
+        side: cand.side,
+        score: Math.min(1, cand.score),
+        rejected,
+      };
+    }
+    rejected.push({ sStart: cand.c.sStart, sEnd: cand.c.sEnd, side: cand.side, reason: "no at-grade sub-range" });
+  }
+  return null;
 }
 
 /** Is an s position on an elevated/underground civil span? */

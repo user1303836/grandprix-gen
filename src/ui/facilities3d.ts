@@ -220,7 +220,7 @@ function pitWallGroup(plan: PitLanePlan): Group {
 }
 
 /** Build every facility mesh for the current plan. */
-export function buildFacilityMeshes(plan: FacilityPlan, track: Track): Group {
+export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: import("../core/facilities/types").GroundSurface | null = null): Group {
   const group = new Group();
   group.name = "facilities";
   if (plan.pitLane) {
@@ -229,6 +229,9 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track): Group {
   }
   if (plan.pitComplex) {
     group.add(pitComplexMeshes(plan.pitComplex, track, { sStart: plan.site.sStart, side: plan.site.side }));
+  }
+  if (plan.foundations.length > 0) {
+    group.add(foundationMeshes(plan, ground));
   }
   return group;
 }
@@ -242,6 +245,8 @@ import {
   Matrix4,
   PlaneGeometry,
   Quaternion,
+  Shape,
+  ShapeGeometry,
   Vector3,
 } from "three";
 import type { BuildingVolumePlan, PitComplexPlan } from "../core/facilities/types";
@@ -439,36 +444,33 @@ function canopyGroup(complex: PitComplexPlan, track: Track, siteS: { sStart: num
   return g;
 }
 
-/** Paddock apron surface polygon. */
-function paddockMesh(complex: PitComplexPlan): Mesh | null {
-  const pad = complex.paddockApron;
-  if (!pad || pad.polygon.length < 3) return null;
-  const n = pad.polygon.length;
-  const positions = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    positions[i * 3] = pad.polygon[i].x;
-    positions[i * 3 + 1] = pad.polygon[i].y;
-    positions[i * 3 + 2] = pad.z + 0.03;
-  }
-  const indices: number[] = [];
-  for (let i = 1; i < n - 1; i++) indices.push(0, i, i + 1);
-  const geo = new BufferGeometry();
-  geo.setAttribute("position", new BufferAttribute(positions, 3));
-  geo.setIndex(indices);
+/** Flat polygon mesh (earcut via ShapeGeometry) at height z, plan coords. */
+function flatPolygonMesh(polygon: { x: number; y: number }[], z: number, mat: MeshStandardMaterial): Mesh | null {
+  if (polygon.length < 3) return null;
+  const shape = new Shape();
+  shape.moveTo(polygon[0].x, polygon[0].y);
+  for (let i = 1; i < polygon.length; i++) shape.lineTo(polygon[i].x, polygon[i].y);
+  shape.closePath();
+  const geo = new ShapeGeometry(shape);
+  // ShapeGeometry is in XY; plan (x, y) -> world (x, z, -y)
+  geo.rotateX(-Math.PI / 2);
+  geo.scale(1, 1, -1);
+  geo.translate(0, z, 0);
   geo.computeVertexNormals();
-  // note: polygon is plan (x,y); convert in-place (mesh built in plan space)
-  const posAttr = geo.getAttribute("position") as BufferAttribute;
-  for (let i = 0; i < posAttr.count; i++) {
-    const x = posAttr.getX(i);
-    const y = posAttr.getY(i);
-    const z = posAttr.getZ(i);
-    posAttr.setXYZ(i, x, z, -y);
-  }
-  geo.computeVertexNormals();
-  const mat = new MeshStandardMaterial({ color: pad.surface === "gravel" ? 0x8a8578 : 0x3c4046, roughness: 1, side: DoubleSide });
   const mesh = new Mesh(geo, mat);
   mesh.receiveShadow = true;
   return mesh;
+}
+
+/** Paddock apron surface polygon. */
+function paddockMesh(complex: PitComplexPlan): Mesh | null {
+  const pad = complex.paddockApron;
+  if (!pad) return null;
+  return flatPolygonMesh(
+    pad.polygon,
+    pad.z + 0.03,
+    new MeshStandardMaterial({ color: pad.surface === "gravel" ? 0x8a8578 : 0x3c4046, roughness: 1, side: DoubleSide }),
+  );
 }
 
 /** Pit-complex meshes (buildings, doors, canopy, paddock). */
@@ -481,5 +483,65 @@ export function pitComplexMeshes(complex: PitComplexPlan, track: Track, site: { 
   g.add(canopyGroup(complex, track, site));
   const pad = paddockMesh(complex);
   if (pad) g.add(pad);
+  return g;
+}
+
+// ============================================================ foundations
+
+import type { FoundationPlan, GroundSurface } from "../core/facilities/types";
+
+const PLINTH_MAT = new MeshStandardMaterial({ color: 0xa8a49a, roughness: 0.95 });
+
+/** Visible foundation: pad slab + perimeter skirt down to the ground. */
+function foundationMesh(f: FoundationPlan, ground: GroundSurface | null): Group {
+  const g = new Group();
+  const datum = f.datumZ[0];
+  const n = f.footprint.length;
+  // top pad (earcut-triangulated; footprints may be concave)
+  const pad = flatPolygonMesh(f.footprint, datum, new MeshStandardMaterial({ color: 0x9b978d, roughness: 1, side: DoubleSide }));
+  if (pad) g.add(pad);
+  // skirt walls along each edge, from datum down to ground (stepped)
+  for (let i = 0; i < n; i++) {
+    const a = f.footprint[i];
+    const b = f.footprint[(i + 1) % n];
+    const steps = 4;
+    for (let k = 0; k < steps; k++) {
+      const t0 = k / steps;
+      const t1 = (k + 1) / steps;
+      const x0 = a.x + (b.x - a.x) * t0;
+      const y0 = a.y + (b.y - a.y) * t0;
+      const x1 = a.x + (b.x - a.x) * t1;
+      const y1 = a.y + (b.y - a.y) * t1;
+      const gm = ground?.elevationAt((x0 + x1) / 2, (y0 + y1) / 2);
+      const bottom = (gm ?? datum) - 0.4;
+      const h = datum - bottom;
+      if (h < 0.15) continue;
+      const len = Math.hypot(x1 - x0, y1 - y0);
+      const wall = new Mesh(new BoxGeometry(len + 0.1, h, 0.5), PLINTH_MAT);
+      wall.position.set((x0 + x1) / 2, bottom + h / 2, -(y0 + y1) / 2);
+      wall.rotation.y = -Math.atan2(y1 - y0, x1 - x0);
+      wall.castShadow = true;
+      g.add(wall);
+    }
+  }
+  // column-deck: visible columns at the support points
+  if (f.kind === "column-deck" || f.kind === "piles") {
+    for (const s of f.supports) {
+      const gm = ground?.elevationAt(s.x, s.y);
+      const h = gm === null || gm === undefined ? 0 : Math.max(0, s.topZ - gm);
+      if (h < 1) continue;
+      const col = new Mesh(new CylinderGeometry(0.35, 0.42, h, 8), PLINTH_MAT);
+      col.position.set(s.x, (gm ?? s.topZ) + h / 2, -s.y);
+      g.add(col);
+    }
+  }
+  return g;
+}
+
+/** All foundation meshes for the plan. */
+export function foundationMeshes(plan: import("../core/facilities/types").FacilityPlan, ground: GroundSurface | null): Group {
+  const g = new Group();
+  g.name = "facility-foundations";
+  for (const f of plan.foundations) g.add(foundationMesh(f, ground));
   return g;
 }
