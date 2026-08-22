@@ -120,6 +120,21 @@ rejection).
 Site mode drapes real satellite imagery (Esri World Imagery) over the
 carved 3D terrain and the 2D map backdrop.
 
+### Procedural circuit worlds (blank-canvas mode)
+
+Blank mode no longer floats the circuit over a flat plane: a deterministic
+**procedural world** is composed around the generated track — relationship
+planner (crests→ridges, compressions→valleys, hairpins→hillside benches,
+start→developed ground), domain-warped landform synthesis conditioned by
+sparse corridor constraints, rivers that descend real gorges and get bridged
+by the unmodified civil planner, biomes, hero landmarks, and diorama/island
+boundaries. The same track + a different environment seed = a radically
+different world. See docs/procedural-world.md.
+
+| river-valley | coastal-island | alpine-canyon |
+|---|---|---|
+| ![](docs/world-seeds/seed-river-valley.png) | ![](docs/world-seeds/seed-coastal-island.png) | ![](docs/world-seeds/seed-alpine-canyon.png) |
+
 ### Rendering & atmosphere
 
 The 3D view is built to be looked at, not just inspected:

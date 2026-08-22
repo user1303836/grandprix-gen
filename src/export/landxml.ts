@@ -4,7 +4,7 @@
  * Importable into Autodesk Civil 3D and other civil tools.
  */
 
-import type { TerrainGrid } from "../core/terrain";
+import type { TerrainSurface } from "../core/terrain";
 import type { Track } from "../core/types";
 
 function xmlEscape(s: string): string {
@@ -14,7 +14,7 @@ function xmlEscape(s: string): string {
 /** LandXML point order: "northing easting elevation" space separated. */
 export function trackToLandXML(
   track: Track,
-  opts: { terrain?: TerrainGrid | null; name?: string } = {},
+  opts: { terrain?: TerrainSurface | null; name?: string } = {},
 ): string {
   const name = opts.name ?? "grandprix-gen circuit";
   const s = track.samples;

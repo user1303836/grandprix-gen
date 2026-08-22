@@ -21,7 +21,7 @@ export interface SliderOpts {
   step: number;
   value: number;
   format?: (v: number) => string;
-  badge?: "morph" | "struct";
+  badge?: "morph" | "struct" | "world";
   title?: string;
   onInput: (v: number) => void;
   onCommit?: (v: number) => void;
@@ -50,7 +50,7 @@ export function sliderRow(label: string, opts: SliderOpts): HTMLElement {
     labelEl.append(
       el("span", {
         className: `badge ${opts.badge}`,
-        textContent: opts.badge === "morph" ? "morph" : "struct",
+        textContent: opts.badge === "morph" ? "morph" : opts.badge === "world" ? "world" : "struct",
       }),
     );
   }

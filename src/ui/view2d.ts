@@ -7,6 +7,13 @@ import type { AppState, HeatLayer } from "./state";
 import { sampleAt } from "../core/types";
 import type { Track, TrackSample } from "../core/types";
 import type { TerrainGrid } from "../core/terrain";
+import { surfaceFromPlan } from "../core/world/synthesis";
+
+/** Structural grid shape the 2D backdrop needs (real DEM or world plan grid). */
+type BackdropGrid = Pick<
+  TerrainGrid,
+  "width" | "height" | "resolution" | "originX" | "originY" | "elevation" | "minElevation" | "maxElevation" | "slopeAt"
+>;
 import { Corridor } from "../core/corridor";
 import {
   FeatureColors,
@@ -158,11 +165,11 @@ export class View2D {
     return best < maxDist * maxDist ? bestS : null;
   }
 
-  private terrainCache = new Map<TerrainGrid, HTMLCanvasElement>();
+  private terrainCache = new Map<object, HTMLCanvasElement>();
   private buildingsFor: unknown = null;
   private buildingsCanvas: HTMLCanvasElement | null = null;
 
-  private terrainCanvasFor(grid: TerrainGrid): HTMLCanvasElement {
+  private terrainCanvasFor(grid: BackdropGrid): HTMLCanvasElement {
     let cv = this.terrainCache.get(grid);
     if (!cv) {
       cv = this.buildTerrainCanvas(grid);
@@ -171,7 +178,7 @@ export class View2D {
     return cv;
   }
 
-  private drawGridBackdrop(grid: TerrainGrid, alpha: number): void {
+  private drawGridBackdrop(grid: BackdropGrid, alpha: number): void {
     const ctx = this.ctx;
     const tc = this.terrainCanvasFor(grid);
     ctx.imageSmoothingEnabled = true;
@@ -357,6 +364,11 @@ export class View2D {
       this.fitH = this.canvas.height;
     }
 
+    // blank-canvas world backdrop (synthetic terrain under the ribbon)
+    if (!state.terrain && state.track?.world && state.showTerrainHeat) {
+      const surf = surfaceFromPlan(state.track.world);
+      this.drawGridBackdrop(surf, 0.85);
+    }
     // terrain context backdrop (coarse surroundings)
     if (state.terrainContext && state.showTerrainHeat) {
       this.drawGridBackdrop(state.terrainContext, 0.5);
@@ -443,7 +455,7 @@ export class View2D {
   }
 
   // ------------------------------------------------------------ terrain
-  private buildTerrainCanvas(grid: TerrainGrid): HTMLCanvasElement {
+  private buildTerrainCanvas(grid: BackdropGrid): HTMLCanvasElement {
     const w = grid.width;
     const h = grid.height;
     const cv = document.createElement("canvas");
@@ -487,7 +499,7 @@ export class View2D {
   }
 
   /** Marching-squares contour pass at level L over the terrain grid. */
-  private marchingSquares(ctx: CanvasRenderingContext2D, grid: TerrainGrid, L: number): void {
+  private marchingSquares(ctx: CanvasRenderingContext2D, grid: BackdropGrid, L: number): void {
     const w = grid.width;
     const h = grid.height;
     const z = grid.elevation;

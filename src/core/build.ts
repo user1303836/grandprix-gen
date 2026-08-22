@@ -23,6 +23,8 @@ import { designCharacter } from "./profiles";
 import { Corridor } from "./corridor";
 import { RunoffKind, elementRangesFor } from "./character";
 import { summarizeViolations, validateCorridor } from "./corridorValidate";
+import { composeWorld } from "./world/compose";
+import type { EnvironmentParams, WorldPlan } from "./world/types";
 import { civilKindAt, defaultCivilControls, planCivil, repairSpans, rollCivilStyle, type CivilControls, type CivilPlan, type CivilStyle, type FeasibilityMode } from "./civil";
 import { Rng } from "./prng";
 import {
@@ -47,6 +49,9 @@ export interface BuildOptions {
   terrainSampler?: ((x: number, y: number) => number) | null;
   /** Site mode: clamp the horizontal footprint to this radius (meters). */
   maxFootprintRadius?: number;
+  /** Blank-canvas world mode: compose a synthetic landscape around the
+   * track (track-first). Mutually exclusive with terrainSampler. */
+  environment?: { seed: number; params: EnvironmentParams } | null;
 }
 
 export interface BuildResult {
@@ -187,17 +192,62 @@ export function buildTrack(
   const bank = character.bank;
   const props = character.props;
 
+  // 10b. blank-canvas world: compose a synthetic landscape AROUND the
+  // finished track (track-first: the road keeps its designed profile; the
+  // terrain is shaped to meet it). Then the same corridor/civil pipeline
+  // as site mode finalizes ground contact, structures, and carving.
+  let worldPlan: WorldPlan | null = null;
+  let worldSampler: ((x: number, y: number) => number) | null = null;
+  if (!opts.terrainSampler && opts.environment) {
+    const shimS: TrackSample[] = new Array(n);
+    for (let i = 0; i < n; i++) {
+      shimS[i] = {
+        s: i * ds,
+        x: uni.x[i],
+        y: uni.y[i],
+        z: z[i],
+        heading: heading[i],
+        kappa: kappa[i],
+        bank: bank[i],
+        width: props.widthL[i] + props.widthR[i],
+        groundZ: 0,
+        speed: NaN,
+      };
+    }
+    const composed = composeWorld({
+      samples: shimS,
+      corners,
+      features: character.features,
+      ds,
+      length: uni.length,
+      envSeed: opts.environment.seed,
+      envParams: opts.environment.params,
+    });
+    worldPlan = composed.plan;
+    const surf = composed.surface;
+    worldSampler = (x: number, y: number): number => {
+      const v = surf.elevationAt(x, y);
+      return Number.isFinite(v) ? v : 0;
+    };
+    for (let i = 0; i < n; i++) groundZ[i] = worldSampler(uni.x[i], uni.y[i]);
+  }
+  const terrainSampler = opts.terrainSampler ?? worldSampler;
+
   // 11. terrain conformance is a HARD constraint, re-checked after feature
   // geometry (crests/bowls/dips move z): the road never clips the land.
   let structures: Track["structures"] = [];
   let carveMask: Uint8Array | null = null;
   let carveInner: Float32Array | null = null;
   let civil: CivilPlan | null = null;
-  if (opts.terrainSampler) {
+  if (terrainSampler) {
     const tol = params.earthworkTolerance;
     const cut = Math.max(0.5, params.maxCut * (0.25 + 0.75 * tol)) + 2.5; // feature headroom
     const fill = Math.max(0.5, params.maxFill * (0.25 + 0.75 * tol));
-    z = conformToTerrain(z, groundZ, ds, params.maxGrade, cut, fill);
+    // site mode conforms the road to the real terrain; world mode keeps
+    // the designed vertical identity (the terrain was conditioned to it)
+    if (opts.terrainSampler) {
+      z = conformToTerrain(z, groundZ, ds, params.maxGrade, cut, fill);
+    }
 
     // offset ground for banking-into-hill (left/right of the corridor)
     const gL = new Float64Array(n);
@@ -207,12 +257,12 @@ export function buildTrack(
       const nx = -Math.sin(h);
       const ny = Math.cos(h);
       const off = (props.widthL[i] + props.widthR[i]) / 2 + 9;
-      gL[i] = opts.terrainSampler(uni.x[i] + nx * off, uni.y[i] + ny * off);
-      gR[i] = opts.terrainSampler(uni.x[i] - nx * off, uni.y[i] - ny * off);
+      gL[i] = terrainSampler(uni.x[i] + nx * off, uni.y[i] + ny * off);
+      gR[i] = terrainSampler(uni.x[i] - nx * off, uni.y[i] - ny * off);
     }
 
     // conform to the hillside FIRST so the corridor sees final banking
-    const coupling0 = character.identity.terrainCoupling;
+    const coupling0 = opts.terrainSampler ? character.identity.terrainCoupling : 0;
     if (coupling0 > 0.05) {
       for (let i = 0; i < n; i++) {
         const off = (props.widthL[i] + props.widthR[i]) / 2 + 9;
@@ -232,16 +282,16 @@ export function buildTrack(
     const shim = { samples: shimSamples, props, ds, length: uni.length } as unknown as Track;
     const corridor = new Corridor(shim);
     const controls = civilControlsFromParams(params, seed);
-    civil = planCivil(shim, corridor, opts.terrainSampler, controls, seed);
+    civil = planCivil(shim, corridor, terrainSampler, controls, seed);
     // repair: split rises out of elevated spans into cut kinds BEFORE
     // validation (the repair is cheap; validation then judges the rest)
-    civil.spans = repairSpans(civil.spans, shim, corridor, opts.terrainSampler, ds);
+    civil.spans = repairSpans(civil.spans, shim, corridor, terrainSampler, ds);
     structures = civilSpansToLegacy(civil.spans);
 
     // corridor-level validation: the finished cross-section against the
     // terrain (and against itself). Violations mark the plan infeasible;
     // the candidate search then reroutes/rejects instead of clipping.
-    let civilViolations = validateCorridor(shim, corridor, opts.terrainSampler, civil);
+    let civilViolations = validateCorridor(shim, corridor, terrainSampler, civil);
     if (civilViolations.length > 0) {
       // REPLAN once: penalize the misbehaving kinds and plan again
       const penalty: Partial<Record<import("./civil").CivilKind, number>> = {};
@@ -257,9 +307,9 @@ export function buildTrack(
           penalty.gallery = 2.0;
         }
       }
-      const retry = planCivil(shim, corridor, opts.terrainSampler, { ...controls, extraPenalty: penalty }, seed ^ 0x9e37);
-      retry.spans = repairSpans(retry.spans, shim, corridor, opts.terrainSampler, ds);
-      const v2 = validateCorridor(shim, corridor, opts.terrainSampler, retry);
+      const retry = planCivil(shim, corridor, terrainSampler, { ...controls, extraPenalty: penalty }, seed ^ 0x9e37);
+      retry.spans = repairSpans(retry.spans, shim, corridor, terrainSampler, ds);
+      const v2 = validateCorridor(shim, corridor, terrainSampler, retry);
       if (v2.length < civilViolations.length) {
         civil = retry;
         civilViolations = v2;
@@ -383,6 +433,10 @@ export function buildTrack(
     carveMask,
     carveInner,
     civil,
+    environment: worldPlan
+      ? { envSeed: opts.environment!.seed, envParams: { ...opts.environment!.params }, version: 1 as const }
+      : null,
+    world: worldPlan,
   };
   return { track, closureError: repaired.closureError };
 }

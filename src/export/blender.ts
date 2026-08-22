@@ -7,13 +7,15 @@
  * Run inside Blender's scripting workspace: exec(open('track_blender.py').read())
  */
 
-import type { TerrainGrid } from "../core/terrain";
+import type { TerrainSurface } from "../core/terrain";
+import { worldExportParts } from "../core/world/exportGeometry";
 import { buildBarrierMeshes, buildTrackMesh } from "./mesh";
 import type { Track } from "../core/types";
 import { buildFacilityMeshParts } from "./facilityMesh";
 
 export interface BlenderOptions {
-  terrain?: TerrainGrid | null;
+  terrain?: TerrainSurface | null;
+  world?: import("../core/world/types").WorldPlan | null;
   stride?: number;
 }
 
@@ -136,6 +138,20 @@ export function trackToBlenderScript(track: Track, opts: BlenderOptions = {}): s
     }
   }
 
+  // world environment parts (water/boundary/vegetation/landmarks)
+  let worldJson = "null";
+  if (opts.world) {
+    // static import (browser ESM)
+    worldJson = JSON.stringify(
+      worldExportParts(opts.world).map((p) => ({
+        name: p.name,
+        color: p.color,
+        positions: Array.from(p.positions, (v) => Math.round(v * 100) / 100),
+        indices: Array.from(p.indices),
+      })),
+    );
+  }
+
   const dataJson = JSON.stringify({
     parts,
     center,
@@ -160,6 +176,7 @@ import json
 
 DATA = json.loads(r'''${dataJson}''')
 TERRAIN = json.loads(r'''${terrainJson}''')
+WORLD = json.loads(r'''${worldJson}''')
 
 # ---------------------------------------------------------------- materials
 def make_mat(name, color, rough=0.92):
@@ -254,6 +271,43 @@ if TERRAIN:
     ob = bpy.data.objects.new("Terrain", me)
     bpy.context.collection.objects.link(ob)
     ob.data.materials.append(MAT["terrain"])
+
+# ------------------------------------------------------------- world parts
+def hex_color(h):
+    return ((h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h & 255) / 255)
+
+if WORLD:
+    for part in WORLD:
+        verts = [(p[i], p[i+1], p[i+2]) for p in [part["positions"]] for i in range(0, len(p), 3)]
+        faces = [tuple(part["indices"][i:i+3]) for i in range(0, len(part["indices"]), 3)]
+        me = bpy.data.meshes.new(part["name"])
+        me.from_pydata(verts, [], faces); me.update()
+        ob = bpy.data.objects.new(part["name"], me)
+        bpy.context.collection.objects.link(ob)
+        mat = bpy.data.materials.get(part["name"]) or bpy.data.materials.new(part["name"])
+        mat.use_nodes = True
+        mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (*hex_color(part["color"]), 1.0)
+        mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
+        ob.data.materials.append(mat)
+
+# ------------------------------------------------------------- world parts
+def hex_color(h):
+    return ((h >> 16 & 255) / 255, (h >> 8 & 255) / 255, (h & 255) / 255)
+
+if WORLD:
+    for part in WORLD:
+        pp = part["positions"]
+        verts = [(pp[i], pp[i + 1], pp[i + 2]) for i in range(0, len(pp), 3)]
+        faces = [tuple(part["indices"][i:i + 3]) for i in range(0, len(part["indices"]), 3)]
+        me = bpy.data.meshes.new(part["name"])
+        me.from_pydata(verts, [], faces); me.update()
+        ob = bpy.data.objects.new(part["name"], me)
+        bpy.context.collection.objects.link(ob)
+        mat = bpy.data.materials.get(part["name"]) or bpy.data.materials.new(part["name"])
+        mat.use_nodes = True
+        mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (*hex_color(part["color"]), 1.0)
+        mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 1.0
+        ob.data.materials.append(mat)
 
 print(f"grandprix-gen: rebuilt ({DATA['meta']['featureCount']} features, era {DATA['meta']['era']})")
 `;

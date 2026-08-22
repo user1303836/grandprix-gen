@@ -16,7 +16,26 @@ import {
   type LocalFrame,
 } from "./geo";
 
-export class TerrainGrid {
+/**
+ * Local-metric terrain contract shared by real DEM grids and synthetic
+ * procedural worlds. Pure meters, no geographic reference required.
+ */
+export interface TerrainSurface {
+  readonly resolution: number;
+  readonly width: number;
+  readonly height: number;
+  readonly originX: number;
+  readonly originY: number;
+  readonly minElevation: number;
+  readonly maxElevation: number;
+  /** true when tied to WGS84 (real-site DEM); synthetic worlds are false */
+  readonly geographic: boolean;
+  elevationAt(x: number, y: number): number;
+  slopeAt(x: number, y: number): number;
+}
+
+export class TerrainGrid implements TerrainSurface {
+  readonly geographic = true;
   /** Local frame tying x/y meters to WGS84. */
   readonly frame: LocalFrame;
   /** Meters per cell. */
@@ -127,8 +146,8 @@ export class TerrainGrid {
 // ---------------------------------------------------------------------------
 
 export interface TrackProximity {
-  /** nearest track sample: horizontal distance + its elevation (null if far) */
-  nearest(x: number, y: number, maxDist?: number): { d: number; z: number } | null;
+  /** nearest track sample: horizontal distance + elevation + index (null if far) */
+  nearest(x: number, y: number, maxDist?: number): { d: number; z: number; i?: number } | null;
   /** all samples within maxDist (for elevation-aware matching) */
   within(
     x: number,
@@ -195,7 +214,7 @@ export function makeTrackProximity(
  * visibly proud of the flattened ground -- never z-fights, never clips.
  */
 export function carveSampler(
-  grid: TerrainGrid,
+  grid: TerrainSurface,
   trackSamples: { x: number; y: number; z: number }[],
   carveMask: Uint8Array | null = null,
   innerM = 40,

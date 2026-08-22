@@ -20,6 +20,9 @@ export interface ToolbarCallbacks {
   onCinema: () => void;
   onCapture: () => void;
   onRecord: () => void;
+  /** blank-canvas world actions (hidden in site mode) */
+  onRegenWorld: () => void;
+  onRandomizeBoth: () => void;
 }
 
 const EXPORT_ITEMS: [string, string, string][] = [
@@ -46,7 +49,7 @@ export function buildToolbar(
   initialSeed: number,
   view: ViewMode,
   cb: ToolbarCallbacks,
-): { root: HTMLElement; seedInput: HTMLInputElement; setView: (v: ViewMode) => void } {
+): { root: HTMLElement; seedInput: HTMLInputElement; setView: (v: ViewMode) => void; setWorldVisible: (v: boolean) => void } {
   const bar = el("div", { className: "toolbar" });
   bar.append(el("span", { className: "brand", textContent: "GRANDPRIX-GEN" }));
 
@@ -73,6 +76,16 @@ export function buildToolbar(
   breed.title = "select 2 candidates below, then breed them";
   breed.addEventListener("click", cb.onBreed);
   bar.append(gen, search, breed);
+
+  const world = el("button", { textContent: "WORLD" });
+  world.title = "regenerate the environment around the same track (blank-canvas mode)";
+  world.dataset.role = "world";
+  world.addEventListener("click", cb.onRegenWorld);
+  const both = el("button", { textContent: "BOTH" });
+  both.title = "new track seed + new world seed";
+  both.dataset.role = "world";
+  both.addEventListener("click", cb.onRandomizeBoth);
+  bar.append(world, both);
 
   bar.append(el("div", { className: "sep" }));
 
@@ -148,11 +161,18 @@ export function buildToolbar(
   menuWrap.append(exportBtn, menu);
   bar.append(menuWrap);
 
+  const setWorldVisible = (v: boolean): void => {
+    bar.querySelectorAll('button[data-role="world"]').forEach((b) => {
+      (b as HTMLElement).style.display = v ? "" : "none";
+    });
+  };
+
   return {
     root: bar,
     seedInput,
     setView: (v: ViewMode) => {
       for (const [key, b] of tabButtons) b.classList.toggle("active", key === v);
     },
+    setWorldVisible,
   };
 }

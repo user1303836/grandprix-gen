@@ -23,7 +23,9 @@ export interface SidebarCallbacks {
   onLockRegen: () => void;
   onClearSite: () => void;
   onPlaceJump: (feature: import("../core/character").TrackFeature) => void;
-
+  /** blank-canvas environment edits (recompose the world) */
+  onEnvParam: (patch: Partial<import("../core/world/types").EnvironmentParams>) => void;
+  onEnvSeed: (seed: number) => void;
 }
 
 const P = (v: number) => `${Math.round(v * 100)}`;
@@ -202,6 +204,72 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
       body.push(info);
     }
     wrap.append(section("Facilities", body, true));
+  }
+
+  // ---------------------------------------------------------- environment
+  if (!state.terrain && state.track) {
+    const env = state.envParams;
+    const ebody: HTMLElement[] = [];
+    const eSel = (
+      label: string,
+      options: readonly string[],
+      current: string,
+      apply: (v: string) => void,
+    ) => {
+      const row = el("div", { className: "ctl" });
+      row.append(el("label", { textContent: label }));
+      const sel = el("select");
+      for (const o of options) {
+        const opt = el("option", { value: o, textContent: o });
+        if (o === current) opt.selected = true;
+        sel.append(opt);
+      }
+      sel.addEventListener("change", () => apply(sel.value));
+      row.append(sel);
+      return row;
+    };
+    const eSlider = (label: string, value: number, apply: (v: number) => void) =>
+      sliderRow(label, { min: 0, max: 1, step: 0.05, value, badge: "world", format: P, onInput: () => {}, onCommit: apply });
+
+    ebody.push(
+      eSel("environment style",
+        ["auto", "highland-forest", "river-valley", "cliffside", "volcanic-plateau", "coastal-island", "alpine-canyon", "plinth-fantasy"] as const,
+        env.style,
+        (v) => cb.onEnvParam({ style: v as typeof env.style })),
+    );
+    ebody.push(eSlider("terrain drama", env.drama, (v) => cb.onEnvParam({ drama: v })));
+    ebody.push(eSlider("track–terrain coupling", env.coupling, (v) => cb.onEnvParam({ coupling: v })));
+    ebody.push(eSlider("water amount", env.water, (v) => cb.onEnvParam({ water: v })));
+    ebody.push(eSlider("vegetation density", env.vegetation, (v) => cb.onEnvParam({ vegetation: v })));
+    ebody.push(
+      eSel("boundary", ["open", "diorama", "island"] as const, env.boundary, (v) =>
+        cb.onEnvParam({ boundary: v as typeof env.boundary }),
+      ),
+    );
+    ebody.push(
+      eSel("realism", ["realistic", "permissive", "fantasy"] as const, env.realism, (v) =>
+        cb.onEnvParam({ realism: v as typeof env.realism }),
+      ),
+    );
+    // env seed row
+    const seedRow = el("div", { className: "ctl" });
+    seedRow.append(el("label", { textContent: "environment seed" }));
+    const seedIn = el("input", { type: "text", value: String(state.envSeed), spellcheck: false });
+    seedIn.style.width = "90px";
+    seedIn.addEventListener("change", () => {
+      const v = Number(seedIn.value.replace(/[^0-9]/g, ""));
+      if (Number.isFinite(v) && v > 0) cb.onEnvSeed(v >>> 0);
+    });
+    seedRow.append(seedIn);
+    ebody.push(seedRow);
+
+    const world = state.track.world;
+    if (world) {
+      const info = el("div", { className: "hint" });
+      info.textContent = `${world.identity.label} · ${world.water.length} water · ${world.landmarks.length} landmarks · ${(world.vegetation.trees.length / 1000).toFixed(1)}k trees`;
+      ebody.push(info);
+    }
+    wrap.append(section("Environment", ebody, true));
   }
 
   // ---------------------------------------------------------- places
