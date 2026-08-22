@@ -298,6 +298,18 @@ export class View3D {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI * 0.495;
+    // zoom toward the cursor: multiplicative dolly alone crawls at close
+    // range (per-notch motion ∝ current radius) — cursor zoom keeps the
+    // rate useful at every distance, and clamp the degenerate radii
+    this.controls.zoomToCursor = true;
+    this.controls.minDistance = 6;
+    this.controls.maxDistance = 30000;
+    // user input kills the intro swoop so it never fights the controls
+    const killSwoop = () => {
+      this.swoop = null;
+    };
+    this.renderer.domElement.addEventListener("pointerdown", killSwoop);
+    this.renderer.domElement.addEventListener("wheel", killSwoop, { passive: true });
     // the browser context menu steals right-drag pan gestures -- kill it
     this.renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
     this.setupHover();
