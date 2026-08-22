@@ -98,6 +98,22 @@ describe("exports", () => {
     expect(fCount).toBeGreaterThan(1000);
   });
 
+  it("exports include facility parts when a facility plan exists", async () => {
+    const { planFacilities } = await import("../src/core/facilities/plan");
+    const { defaultFacilityControls } = await import("../src/core/facilities/types");
+    const t2 = { ...track, facilities: planFacilities(track, null, defaultFacilityControls(884210)) };
+    const obj = trackToObj(t2);
+    expect(obj).toContain("o structure_pit_lane");
+    expect(obj).toContain("o structure_garage_building");
+    const py = trackToBlenderScript(t2);
+    expect(py).toContain("facilityParts");
+    expect(py).toContain("garage_building");
+    // project JSON preserves the facility plan
+    const json = serializeProject(t2);
+    expect(json).toContain("\"facilities\"");
+    expect(json).toContain("pitLane");
+  });
+
   it("Blender script embeds data and is plausible python", () => {
     const py = trackToBlenderScript(track);
     expect(py).toContain("import bpy");

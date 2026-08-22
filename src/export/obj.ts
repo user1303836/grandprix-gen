@@ -6,6 +6,7 @@
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
 import { carveSampler, type TerrainGrid } from "../core/terrain";
 import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
+import { buildFacilityMeshParts } from "./facilityMesh";
 import type { Track } from "../core/types";
 
 export interface ObjOptions {
@@ -65,7 +66,7 @@ export function trackToObj(track: Track, opts: ObjOptions = {}): string {
     const groundSampler = opts.terrain
       ? (x: number, y: number) => opts.terrain!.elevationAt(x, y)
       : null;
-    for (const part of [...buildStructureMeshes(track, groundSampler), ...buildFeatureMeshes(track)]) {
+    for (const part of [...buildStructureMeshes(track, groundSampler), ...buildFeatureMeshes(track), ...buildFacilityMeshParts(track)]) {
       emitPart(`structure_${part.name}`, part.positions, part.indices, 0, part.indices.length);
     }
   }
