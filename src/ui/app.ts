@@ -36,7 +36,12 @@ export class App {
   private view2d: View2D;
   private view3d: View3D;
   private mapView: MapView;
-  private toolbarRef: { root: HTMLElement; seedInput: HTMLInputElement; setView: (v: ViewMode) => void };
+  private toolbarRef: {
+    root: HTMLElement;
+    seedInput: HTMLInputElement;
+    setView: (v: ViewMode) => void;
+    setWorldVisible: (v: boolean) => void;
+  };
   private sidebarEl: HTMLElement;
   private statusEl: HTMLElement;
   private viewportEl: HTMLElement;
@@ -78,6 +83,17 @@ export class App {
       onExport: (kind) => void this.export(kind),
       onSave: () => this.save(),
       onLoad: (file) => void this.load(file),
+      onRegenWorld: () => {
+        const envSeed = (Math.random() * 0xffffffff) >>> 0;
+        void this.recomposeWorld(envSeed);
+      },
+      onRandomizeBoth: () => {
+        const seed = (Math.random() * 0xffffffff) >>> 0;
+        const envSeed = (Math.random() * 0xffffffff) >>> 0;
+        this.toolbarRef.seedInput.value = String(seed);
+        this.store.set({ seed, envSeed }, "seed", "envSeed");
+        this.generate();
+      },
       canBreed: () => this.store.state.candidatesSelected.size >= 2,
       onCinema: () => {
         this.view3d.toggleCinema();
@@ -331,6 +347,9 @@ export class App {
           vehicleId: s.vehicleId,
           site: s.site,
           terrain: this.terrainData(),
+          environment: s.terrain
+            ? null
+            : { envSeed: s.envSeed, envParams: s.envParams, version: 1 as const },
           terrainCandidates: 12,
           avoidBuildings: this.avoidData(),
         },
@@ -519,6 +538,7 @@ export class App {
   ): void {
     const site = { lat: sel.lat, lon: sel.lon, radiusMeters: sel.radiusMeters };
     this.store.set({ terrain: grid, terrainContext: context, buildings: null, site, imagery: null }, "terrain", "terrainContext", "buildings", "site", "imagery");
+    this.toolbarRef.setWorldVisible(false);
     this.setView("2d");
     // satellite drape (best-effort, never blocks the first generate)
     void (async () => {
@@ -725,6 +745,33 @@ export class App {
     })();
   }
 
+  /** Recompose the blank-canvas world around the current track (same
+   * geometry; env seed/params from state). Used for Regenerate World,
+   * env-param edits, and composing worlds onto freshly adopted candidates. */
+  async recomposeWorld(newEnvSeed?: number): Promise<void> {
+    const s = this.store.state;
+    if (!s.track || s.terrain) return;
+    if (newEnvSeed !== undefined) this.store.set({ envSeed: newEnvSeed }, "envSeed");
+    const envSeed = this.store.state.envSeed;
+    const envParams = this.store.state.envParams;
+    this.setBusy("BUILDING WORLD", 0.55);
+    try {
+      const out = await this.engine.run<AnalysisOut | null>("morph", {
+        track: s.track,
+        params: s.params,
+        vehicleId: s.vehicleId,
+        structural: false,
+        terrain: null,
+        environment: { envSeed, envParams, version: 1 as const },
+      });
+      if (out) {
+        this.adoptAnalysis(out, "world");
+      }
+    } finally {
+      this.setBusy(null, null);
+    }
+  }
+
   // ------------------------------------------------------------ section lock
   private onLockSet(which: "start" | "end"): void {
     const s = this.store.state;
@@ -777,13 +824,25 @@ export class App {
       const text = await file.text();
       const track = deserializeProject(text);
       this.store.set(
-        { track, seed: track.seed, params: track.params },
+        {
+          track,
+          seed: track.seed,
+          params: track.params,
+          ...(track.environment
+            ? { envSeed: track.environment.envSeed, envParams: { ...track.environment.envParams } }
+            : {}),
+        },
         "track",
         "seed",
         "params",
+        ...(track.environment ? (["envSeed", "envParams"] as const) : []),
       );
       this.toolbarRef.seedInput.value = String(track.seed);
       this.reanalyzeCurrent();
+      // worlds are runtime-only: recompose from the environment reference
+      if (track.environment && !track.world && !this.store.state.terrain) {
+        void this.recomposeWorld();
+      }
       this.store.pushHistory("loaded");
     } catch (e) {
       alert(`could not load project: ${e instanceof Error ? e.message : e}`);
@@ -867,7 +926,17 @@ export class App {
       onLockRegen: () => this.lockRegen(),
       onClearSite: () => {
         this.store.set({ terrain: null, terrainContext: null, buildings: null, site: null }, "terrain", "site");
+        this.toolbarRef.setWorldVisible(true);
         void this.generate();
+      },
+      onEnvParam: (patch) => {
+        const envParams = { ...this.store.state.envParams, ...patch };
+        this.store.set({ envParams }, "envParams");
+        void this.recomposeWorld();
+      },
+      onEnvSeed: (envSeed) => {
+        this.store.set({ envSeed }, "envSeed");
+        void this.recomposeWorld();
       },
       onPlaceJump: (f) => {
         const mid = ((f.sStart + f.sEnd) / 2) % (this.store.state.track?.length ?? 1);
@@ -907,6 +976,11 @@ export class App {
         this.toolbarRef.seedInput.value = String(c.track.seed);
         this.reanalyzeCurrent();
         this.store.pushHistory(`adopt ${c.label.toLowerCase()}`);
+        // blank-canvas candidates are built world-free for speed; compose
+        // the world now (same geometry, env seed from app state)
+        if (!s.terrain && !c.track.world && !c.track.environment) {
+          void this.recomposeWorld();
+        }
       },
       onToggleSelect: (i) => {
         const next = new Set(s.candidatesSelected);

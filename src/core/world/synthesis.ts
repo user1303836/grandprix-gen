@@ -128,9 +128,9 @@ export function constraintsFromSpans(
 
     switch (sp.kind) {
       case "at-grade":
-        push(0, -0.6, 55, 0.85);
-        push(45, -1.5 - rng.next() * 2, 70, 0.5);
-        push(-45, -1.5 - rng.next() * 2, 70, 0.5);
+        push(0, -0.6, 46, 0.8);
+        push(60, -2 - rng.next() * 3, 60, 0.3);
+        push(-60, -2 - rng.next() * 3, 60, 0.3);
         break;
       case "developed":
         push(0, -0.5, 90, 0.95);
@@ -299,7 +299,7 @@ export interface SynthesisResult {
   moisture: Float32Array;
 }
 
-class SyntheticGrid implements TerrainSurface {
+export class SyntheticGrid implements TerrainSurface {
   readonly geographic = false;
   readonly minElevation: number;
   readonly maxElevation: number;
@@ -391,7 +391,7 @@ export function synthesizeTerrain(
   const spanX = maxX - minX;
   const spanY = maxY - minY;
   const span = Math.max(spanX, spanY);
-  const margin = Math.max(140, span * 0.16);
+  const margin = Math.max(180, span * 0.3);
   const cx = (minX + maxX) / 2;
   const cy = (minY + maxY) / 2;
   const baseZ = (zMin + zMax) / 2 - 6;
@@ -538,6 +538,26 @@ export function synthesizeTerrain(
     }
   }
 
+  // open-boundary fade: the rim settles toward the world base so the edge
+  // reads as haze-covered lowland instead of a floating sheet edge
+  if (params.boundary === "open") {
+    const fadeM = margin * 0.55;
+    const rimZ = baseZ - 6 - params.drama * 20;
+    for (let iy = 0; iy < height; iy++) {
+      for (let ix = 0; ix < width; ix++) {
+        const wx = originX + ix * resolution;
+        const wy = originY + iy * resolution;
+        const dEdge = Math.min(wx - originX, originX + (width - 1) * resolution - wx, wy - originY, originY + (height - 1) * resolution - wy);
+        if (dEdge < fadeM) {
+          const t = 1 - dEdge / fadeM;
+          const k = t * t * (3 - 2 * t) * 0.85;
+          const i = iy * width + ix;
+          z[i] = z[i] * (1 - k) + rimZ * k;
+        }
+      }
+    }
+  }
+
   // moisture: base by hydrology + noise; hydrology module adds water detail
   const moisture = new Float32Array(width * height);
   const mBase =
@@ -559,4 +579,29 @@ export function synthesizeTerrain(
 
   const surface = new SyntheticGrid(resolution, width, height, originX, originY, z);
   return { surface, moisture };
+}
+
+// ---------------------------------------------------------------------------
+// plan -> surface
+// ---------------------------------------------------------------------------
+
+const planSurfaceCache = new WeakMap<object, SyntheticGrid>();
+
+/** TerrainSurface view over a composed WorldPlan grid (cached per plan). */
+export function surfaceFromPlan(plan: {
+  grid: {
+    originX: number;
+    originY: number;
+    resolution: number;
+    width: number;
+    height: number;
+    elevation: Float32Array;
+  };
+}): SyntheticGrid {
+  const hit = planSurfaceCache.get(plan.grid);
+  if (hit) return hit;
+  const g = plan.grid;
+  const surf = new SyntheticGrid(g.resolution, g.width, g.height, g.originX, g.originY, g.elevation);
+  planSurfaceCache.set(plan.grid, surf);
+  return surf;
 }

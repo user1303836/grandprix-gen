@@ -78,6 +78,12 @@ export function planVegetation(
       let p = density * (0.35 + moist * 0.9);
       if (nearRole === "forest-corridor") p *= 2.1;
       if (nearRole === "developed") p *= 0.25;
+      // groves and clearings: low-frequency patch gate (deterministic)
+      const patch =
+        Math.sin(x * 0.0016 + envSeed * 0.0001) * Math.sin(y * 0.0013 - envSeed * 0.0002) +
+        Math.sin((x + y) * 0.0009 + 1.7);
+      const gate = Math.min(1, Math.max(0, (patch + 0.35) * 0.75));
+      p *= gate * gate * (2.2 - gate); // sharp-ish clumping
       if (slope > 0.55) p *= 0.15;
       else if (slope > 0.38) p *= 0.5;
       if (z > zMid + (surface.maxElevation - zMid) * 0.55 && identity.biome === "alpine") p *= 0.4;

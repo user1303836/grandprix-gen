@@ -86,6 +86,8 @@ import {
 } from "../core/character";
 import { sampleAt } from "../core/types";
 import { carveSampler, makeTrackProximity, type TerrainSurface } from "../core/terrain";
+import { buildWorldMeshes } from "./worldMeshes";
+import { surfaceFromPlan } from "../core/world/synthesis";
 import type { OsmBuilding } from "../core/osm";
 import { Rng } from "../core/prng";
 import type { AppState } from "./state";
@@ -464,7 +466,7 @@ export class View3D {
         this.trackGroup.add(wall);
       }
       this.addStartFinish(track);
-      this.addStructureMeshes(track, state.terrain);
+      this.addStructureMeshes(track, state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null));
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
@@ -550,6 +552,41 @@ export class View3D {
           this.trackGroup.add(win);
         }
       }
+    } else if (track && track.world) {
+      // procedural world: terrain mesh carved by the same sampler as site
+      // mode, plus boundary skirt, water, vegetation, and landmarks — all
+      // derived from the canonical WorldPlan
+      const world = track.world;
+      const surf = surfaceFromPlan(world);
+      const carve = carveSampler(surf, track.samples, track.carveMask, 40, 78, track.carveInner);
+      const wg = buildWorldMeshes(world, track, {
+        sunDir: this.sunDirection(),
+        horizonColor: SKY_STYLES[this.dayTime].horizon,
+        sunColor: SKY_STYLES[this.dayTime].sunColor,
+        season: this.season,
+        carve,
+      });
+      this.trackGroup.add(wg);
+      // atmosphere: cloud shadows + valley mist over the world
+      const g = world.grid;
+      const spanC = Math.max(g.width, g.height) * g.resolution;
+      this.cloudShadows.configure(
+        g.originX + (g.width * g.resolution) / 2,
+        -(g.originY + (g.height * g.resolution) / 2),
+        (g.minElevation + g.maxElevation) / 2 + 55,
+        spanC * 1.4,
+        SKY_PRESETS[this.dayTime].floodlights ? 0 : 0.3,
+      );
+      this.trackGroup.add(this.cloudShadows.mesh);
+      this.valleyMist.configure(
+        g.originX + (g.width * g.resolution) / 2,
+        -(g.originY + (g.height * g.resolution) / 2),
+        g.minElevation + 8,
+        spanC * 1.3,
+        0,
+      );
+      this.trackGroup.add(this.valleyMist.mesh);
+      this.maybeFitCamera(track, null);
     } else if (track) {
       const span = estimateSpan(track) * 9;
       const gm = buildGridMesh(() => -0.08, -span / 2, -span / 2, span / 2, span / 2, 2, 2);

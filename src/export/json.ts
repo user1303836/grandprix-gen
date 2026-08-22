@@ -49,6 +49,8 @@ export function serializeProject(track: Track): string {
     savedAt: new Date().toISOString(),
     track: {
       ...track,
+      // runtime-only: recomposed from `environment` on load
+      world: undefined,
       props: encodeProps(track.props) as unknown as PropertyProfiles,
       carveMask: track.carveMask ? (Array.from(track.carveMask) as unknown as Uint8Array) : null,
       carveInner: track.carveInner ? (Array.from(track.carveInner) as unknown as Float32Array) : null,
