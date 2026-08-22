@@ -39,7 +39,21 @@ export function planVegetation(
   params: EnvironmentParams,
   envSeed: number,
   water: WaterBody[],
+  boundaryRing?: { x: number; y: number }[] | null,
 ): VegetationPlan {
+  // diorama/island worlds keep vegetation inside the boundary
+  const inRing = (x: number, y: number): boolean => {
+    if (!boundaryRing || boundaryRing.length < 3) return true;
+    let inside = false;
+    for (let i = 0, j = boundaryRing.length - 1; i < boundaryRing.length; j = i++) {
+      const xi = boundaryRing[i].x;
+      const yi = boundaryRing[i].y;
+      const xj = boundaryRing[j].x;
+      const yj = boundaryRing[j].y;
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
   const rng = new Rng(envSeed ^ 0x7e55);
   const prox = makeTrackProximity(samples);
   const [coniferShare, sizeBase, densBase] = BIOME_TREES[identity.biome] ?? [0.5, 0.9, 0.6];
@@ -62,6 +76,7 @@ export function planVegetation(
       const y = surface.originY + (gy + rng.spread(0.45)) * surface.resolution;
       const z = surface.elevationAt(x, y);
       if (!Number.isFinite(z)) continue;
+      if (!inRing(x, y)) continue;
       const gi = Math.round((y - surface.originY) / surface.resolution) * surface.width + Math.round((x - surface.originX) / surface.resolution);
       const moist = moisture[gi] ?? 0.3;
       const slope = surface.slopeAt(x, y);

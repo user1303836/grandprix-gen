@@ -18,6 +18,7 @@ import { gridToData, type AnalysisOut } from "../engine/jobs";
 import { deserializeProject, serializeProject } from "../export/json";
 import { rasterizeBuildingMask } from "../core/osm";
 import { downloadFile, buildTrackPackage } from "../export/package";
+import { surfaceFromPlan } from "../core/world/synthesis";
 import { trackToSvg } from "../export/svg";
 import { trackToCsv } from "../export/csv";
 import { trackToGeoJSON } from "../export/geojson";
@@ -854,7 +855,9 @@ export class App {
     const t = s.track;
     if (!t) return;
     const base = `track-seed${t.seed}`;
-    const terrain = s.terrain ?? undefined;
+    // world mode: exports carry the synthetic terrain + environment parts
+    const terrain = s.terrain ?? (t.world ? surfaceFromPlan(t.world) : undefined);
+    const world = !s.terrain ? (t.world ?? undefined) : undefined;
     switch (kind) {
       case "json":
         downloadFile(`${base}.track.json`, serializeProject(t), "application/json");
@@ -878,11 +881,11 @@ export class App {
         downloadFile(`${base}.landxml`, trackToLandXML(t, { terrain }), "application/xml");
         break;
       case "obj":
-        downloadFile(`${base}.obj`, trackToObj(t, { terrain }), "text/plain");
+        downloadFile(`${base}.obj`, trackToObj(t, { terrain, world }), "text/plain");
         downloadFile(`track.mtl`, trackMtl(), "text/plain");
         break;
       case "blender":
-        downloadFile(`${base}_blender.py`, trackToBlenderScript(t, { terrain }), "text/x-python");
+        downloadFile(`${base}_blender.py`, trackToBlenderScript(t, { terrain, world }), "text/x-python");
         break;
       case "xodr":
         downloadFile(`${base}.xodr`, trackToOpenDrive(t), "application/xml");
@@ -890,7 +893,7 @@ export class App {
       case "glb": {
         this.setBusy("BUILDING GLB", 0.5);
         try {
-          const glb = await trackToGlb(t, terrain);
+          const glb = await trackToGlb(t, terrain, world);
           downloadFile(`${base}.glb`, glb, "model/gltf-binary");
         } finally {
           this.setBusy(null, null);
@@ -900,7 +903,7 @@ export class App {
       case "package": {
         this.setBusy("BUILDING PACKAGE", 0.5);
         try {
-          const zip = await buildTrackPackage(t, { terrain });
+          const zip = await buildTrackPackage(t, { terrain, world });
           downloadFile(`${base}-package.zip`, zip, "application/zip");
         } finally {
           this.setBusy(null, null);

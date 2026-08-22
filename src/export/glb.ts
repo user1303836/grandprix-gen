@@ -46,7 +46,11 @@ function partColor(name: string): number {
   return 0x888888;
 }
 
-export async function trackToGlb(track: Track, terrain?: TerrainSurface | null): Promise<ArrayBuffer> {
+export async function trackToGlb(
+  track: Track,
+  terrain?: TerrainSurface | null,
+  world?: import("../core/world/types").WorldPlan | null,
+): Promise<ArrayBuffer> {
   const group = new Group();
   group.name = "grandprix-gen-circuit";
 
@@ -166,6 +170,28 @@ export async function trackToGlb(track: Track, terrain?: TerrainSurface | null):
     );
     m.name = "terrain";
     group.add(m);
+  }
+
+  if (world) {
+    const { worldExportParts } = await import("../core/world/exportGeometry");
+    for (const part of worldExportParts(world)) {
+      const geo = new BufferGeometry();
+      const pos = new Float32Array(part.positions.length);
+      for (let i = 0; i < part.positions.length; i += 3) {
+        pos[i] = part.positions[i];
+        pos[i + 1] = part.positions[i + 2];
+        pos[i + 2] = -part.positions[i + 1];
+      }
+      geo.setAttribute("position", new BufferAttribute(pos, 3));
+      geo.setIndex(new BufferAttribute(part.indices, 1));
+      geo.computeVertexNormals();
+      const m = new Mesh(
+        geo,
+        new MeshStandardMaterial({ color: part.color, roughness: 1, side: DoubleSide }),
+      );
+      m.name = part.name;
+      group.add(m);
+    }
   }
 
   const exporter = new GLTFExporter();

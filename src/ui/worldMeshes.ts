@@ -158,22 +158,25 @@ function buildWorldTerrainMesh(plan: WorldPlan, opts: WorldMeshOptions): Mesh {
       positions[p++] = safeCarveRef(x, y);
     }
   }
-  const indices = new Uint32Array((nx - 1) * (ny - 1) * 6);
-  let q = 0;
+  const maskToRing = plan.boundary.mode !== "open";
+  const ring = plan.boundary.ring;
+  const indexList: number[] = [];
   for (let iy = 0; iy < ny - 1; iy++) {
     for (let ix = 0; ix < nx - 1; ix++) {
+      if (maskToRing) {
+        // drop quads whose center is outside the boundary ring
+        const gx = Math.min(g.width - 1, ix * step) * g.resolution + g.originX + (step * g.resolution) / 2;
+        const gy = Math.min(g.height - 1, iy * step) * g.resolution + g.originY + (step * g.resolution) / 2;
+        if (!pointInRing(ring, gx, gy)) continue;
+      }
       const a = iy * nx + ix;
       const b = a + 1;
       const c = a + nx;
       const d = c + 1;
-      indices[q++] = a;
-      indices[q++] = c;
-      indices[q++] = b;
-      indices[q++] = b;
-      indices[q++] = c;
-      indices[q++] = d;
+      indexList.push(a, c, b, b, c, d);
     }
   }
+  const indices = new Uint32Array(indexList);
   const safeCarve = (x: number, y: number): number => {
     const v = opts.carve(x, y);
     if (Number.isFinite(v)) return v;
@@ -359,6 +362,18 @@ function buildBoundaryMesh(plan: WorldPlan): Mesh | null {
   const mesh = new Mesh(geo, mat);
   mesh.name = "world-boundary";
   return mesh;
+}
+
+function pointInRing(ring: { x: number; y: number }[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i].x;
+    const yi = ring[i].y;
+    const xj = ring[j].x;
+    const yj = ring[j].y;
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
 
 function sampleGridZ(plan: WorldPlan, x: number, y: number): number {

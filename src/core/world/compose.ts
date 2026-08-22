@@ -45,7 +45,19 @@ export function composeWorld(input: ComposeInput): ComposeResult {
 
   const boundary = planBoundary(samples, surface, identity, envParams.boundary, envSeed);
 
-  const vegetation = planVegetation(surface, moisture, samples, spans, length, ds, identity, envParams, envSeed, water);
+  const vegetation = planVegetation(
+    surface,
+    moisture,
+    samples,
+    spans,
+    length,
+    ds,
+    identity,
+    envParams,
+    envSeed,
+    water,
+    envParams.boundary === "open" ? null : boundary.ring,
+  );
 
   const landmarks = planLandmarks(samples, corners, spans, ds, length, surface, identity, envParams, water, envSeed);
 

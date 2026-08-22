@@ -6,11 +6,13 @@
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
 import { carveSampler, type TerrainSurface } from "../core/terrain";
 import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
+import { worldExportParts } from "../core/world/exportGeometry";
 import type { Track } from "../core/types";
 
 export interface ObjOptions {
   terrain?: TerrainSurface | null;
   terrainExtent?: number;
+  world?: import("../core/world/types").WorldPlan | null;
 }
 
 export function trackToObj(track: Track, opts: ObjOptions = {}): string {
@@ -99,6 +101,24 @@ export function trackToObj(track: Track, opts: ObjOptions = {}): string {
       out.push(`f ${a} ${b} ${c}`);
     }
     vOffset += mesh2.positions.length / 3;
+  }
+
+  if (opts.world) {
+    for (const part of worldExportParts(opts.world)) {
+      out.push(`o ${part.name}`);
+      out.push("usemtl terrain");
+      for (let i = 0; i < part.positions.length; i += 3) {
+        out.push(
+          `v ${part.positions[i].toFixed(2)} ${part.positions[i + 2].toFixed(2)} ${(-part.positions[i + 1]).toFixed(2)}`,
+        );
+      }
+      for (let i = 0; i < part.indices.length; i += 3) {
+        out.push(
+          `f ${part.indices[i] + vOffset} ${part.indices[i + 1] + vOffset} ${part.indices[i + 2] + vOffset}`,
+        );
+      }
+      vOffset += part.positions.length / 3;
+    }
   }
 
   return out.join("\n") + "\n";
