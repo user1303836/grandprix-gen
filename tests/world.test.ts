@@ -6,10 +6,8 @@
 import { describe, expect, it } from "vitest";
 import { generateValidTrack } from "../src/core/generator";
 import { buildTrack } from "../src/core/build";
-import { generateElements } from "../src/core/generator";
 import { defaultParams, type Track } from "../src/core/types";
 import { Rng } from "../src/core/prng";
-import { composeWorld } from "../src/core/world/compose";
 import { surfaceFromPlan } from "../src/core/world/synthesis";
 import { roleAt } from "../src/core/world/relationships";
 import { worldExportParts } from "../src/core/world/exportGeometry";
