@@ -54,6 +54,7 @@ import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
 import { makeAsphaltTexture, makeConcreteTexture, makeGrassTexture, makeGravelTexture, makeMownGrassTexture } from "./textures";
 import { buildFurniture, windUniform } from "./furniture";
+import { buildFacilityMeshes } from "./facilities3d";
 import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
 import { RainSystem } from "./rain";
@@ -469,6 +470,9 @@ export class View3D {
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
+      if (track.facilities) {
+        this.trackGroup.add(buildFacilityMeshes(track.facilities, track));
+      }
       this.addPuddles(track);
       this.maybeFitCamera(track, state.terrain);
       this.rebuildFloodlights();

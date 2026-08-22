@@ -509,7 +509,7 @@ export function buildFurniture(track: Track): Group {
   // ---------- pit garages behind the pit lane ----------------------------------
   {
     const pit = (track.features ?? []).find((x) => x.kind === "pit-lane");
-    if (pit) {
+    if (pit && !track.facilities?.pitLane) {
       const doorColors = [0xc83a2a, 0x2a5a9e, 0x3a9a5a, 0xe8a83a, 0x7a4a9e, 0x3aa8b8];
       const nBoxes = 12;
       const s0 = (pit.sStart + 20) % L;
