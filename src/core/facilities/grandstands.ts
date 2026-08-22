@@ -117,8 +117,9 @@ function planStand(
   const rowRise = kind === "temporary-bleacher" ? 0.55 : 0.62;
   const tiers = kind === "multi-tier" ? 2 : 1;
   const depth = rows * rowDepth * 1.05 + 4;
-  const cx = ox + front.x * (depth / 2);
-  const cy = oy + front.y * (depth / 2);
+  // the stand extends BACKWARD from its front edge (away from the track)
+  const cx = ox - front.x * (depth / 2);
+  const cy = oy - front.y * (depth / 2);
   const angleU = Math.atan2(longDir.y, longDir.x);
   const footprint = polygonOfRect(cx, cy, width / 2, depth / 2, angleU);
   const stats = footprintStats(ground, footprint);

@@ -590,16 +590,19 @@ const SEAT_FRAME = new MeshStandardMaterial({ color: 0xb8bcc2, roughness: 0.8, m
 const SEAT_COLORS = [0x2a5a9e, 0xc83a2a, 0x3a9a5a, 0xe8b23a, 0xe8e8e8];
 
 /**
- * One grandstand. Local frame per the orientation contract:
- *   local +X = longDir (along rows), local +Z = -frontDir (rows rise away
- *   from the track). Rows step up as they recede.
+ * One grandstand. Documented local frame (right-handed):
+ *   local +X = longDir (along seating rows)
+ *   local +Y = up
+ *   local +Z = frontDir (TOWARD the track)
+ * Rows therefore recede at NEGATIVE local Z and rise away from the track.
+ * Basis is orthonormal with determinant +1 (quaternion-safe) because
+ * longDir == perp(frontDir) in plan space.
  */
 function grandstandMesh(st: GrandstandPlan): Group {
   const g = new Group();
   const depth = st.rows * st.rowDepth;
-  // orientation basis: X = longDir, Z = -frontDir (into the stand)
   const x = new Vector3(st.longDir.x, 0, -st.longDir.y);
-  const zAxis = new Vector3(-st.frontDir.x, 0, st.frontDir.y);
+  const zAxis = new Vector3(st.frontDir.x, 0, -st.frontDir.y);
   const y = new Vector3(0, 1, 0);
   const m = new Matrix4().makeBasis(x, y, zAxis);
   const q = new Quaternion().setFromRotationMatrix(m);
@@ -625,7 +628,7 @@ function grandstandMesh(st: GrandstandPlan): Group {
     fascia.position.set(0, row0 * st.rowRise - 0.4 + tier * 0.9, -(row0 * st.rowDepth + tierDropback) + 0.2);
     g.add(fascia);
   }
-  // rear wall
+  // rear wall (furthest from the track: local -Z extreme)
   const rearH = st.rows * st.rowRise + 2.2;
   const rear = new Mesh(new BoxGeometry(st.width, rearH, 0.5), SEAT_FRAME);
   rear.position.set(0, rearH / 2 - 0.5, -(depth + st.tiers * 1.2 + 0.3));
@@ -636,15 +639,15 @@ function grandstandMesh(st: GrandstandPlan): Group {
     side.position.set((sx * st.width) / 2, (rearH * 0.85) / 2 - 0.4, -(depth / 2));
     g.add(side);
   }
-  // roof (cantilevered toward the track: front = local +z)
+  // roof: cantilevers TOWARD the track (positive local Z overhang)
   if (st.roof && st.roof !== "none") {
     const roofDepth = depth * 0.85 + 6;
     const roof = new Mesh(
       new BoxGeometry(st.width + 1.5, 0.28, roofDepth),
       st.roof === "tensile-canopy" || st.roof === "fabric" ? CANVAS_MAT : ROOF_MAT,
     );
-    roof.position.set(0, rearH + 1.4, -(depth / 2) + roofDepth * 0.18);
-    roof.rotation.x = st.roof === "cantilever" ? -0.07 : 0;
+    roof.position.set(0, rearH + 1.4, -depth + roofDepth / 2 - 1.2);
+    roof.rotation.x = st.roof === "cantilever" ? 0.07 : 0;
     roof.castShadow = true;
     g.add(roof);
     // roof support columns at the rear (cantilever logic: held from behind)
