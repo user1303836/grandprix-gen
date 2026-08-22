@@ -43,6 +43,8 @@ import {
   PlaneGeometry,
   CircleGeometry,
   Quaternion,
+  Points,
+  PointsMaterial,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -760,6 +762,35 @@ export class View3D {
       this.sky.setStyle(SKY_STYLES[this.dayTime]);
     }
     this.sky.setSunDirection(this.sunDirection());
+    // facility lamps + screen emissives follow the night
+    const nightK = this.dayTime === "night" ? 1 : this.dayTime === "dusk" ? 0.6 : this.dayTime === "golden" ? 0.18 : 0;
+    this.scene.traverse((o) => {
+      if (o.name === "facility-lamps" && o instanceof Points) {
+        (o.material as PointsMaterial).opacity = nightK * 0.95;
+      }
+      if (o.name === "screen-emissive" && o instanceof Mesh) {
+        (o.material as MeshStandardMaterial).emissiveIntensity = 0.25 + nightK * 1.6;
+      }
+    });
+    // facility real-light pool
+    if (this.state?.track?.facilities) {
+      const plan = this.state.track.facilities;
+      while (this.facilityLights.length < Math.min(4, plan.lighting.realLightIndices.length)) {
+        const l = new PointLight(0xffe8c8, 0, 90, 1.8);
+        this.scene.add(l);
+        this.facilityLights.push(l);
+      }
+      this.facilityLights.forEach((l, i) => {
+        const ai = plan.lighting.realLightIndices[i];
+        const a = ai !== undefined ? plan.lighting.anchors[ai] : null;
+        if (!a) {
+          l.intensity = 0;
+          return;
+        }
+        l.position.set(a.x, a.z, -a.y);
+        l.intensity = nightK * 700 * a.intensity;
+      });
+    }
     // lights
     this.sun.color.setHex(this.weather === "rain" ? 0xaebdd2 : p.sunColor);
     this.sun.intensity = this.weather === "rain" ? p.sunIntensity * 0.55 : p.sunIntensity;
@@ -1072,6 +1103,7 @@ export class View3D {
   }
 
   private facilityGround: import("../core/facilities/types").GroundSurface | null = null;
+  private facilityLights: PointLight[] = [];
   private readonly basisM4 = new Matrix4();
   private readonly basisQ = new Quaternion();
   /** Orient a car from the shared 3D road frame (no Euler guessing). */

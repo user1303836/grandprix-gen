@@ -11,6 +11,7 @@ import { rollFacilityIdentity } from "./identity";
 import { buildPitComplex } from "./pitComplex";
 import { chooseFoundation, footprintStats, polygonOfRect } from "./foundations";
 import { buildGrandstands } from "./grandstands";
+import { buildLighting } from "./lighting";
 import { buildPitLane } from "./pitLane";
 import { selectFacilitySite } from "./siteSelection";
 import {
@@ -62,6 +63,7 @@ export function planFacilities(
       grandstands: [],
       foundations: [],
       lighting: { anchors: [], realLightIndices: [] },
+      screens: [],
       reservation: { developedPolygons: [], vegetationExclusionPolygons: [], preferredElevationBands: [], requiredAccessCorridors: [] },
       feasible: false,
       violations,
@@ -111,6 +113,29 @@ export function planFacilities(
     }
   }
 
+  // ---- screens (generated content) ------------------------------------------
+  const screens: import("./types").ScreenPlan[] = [];
+  {
+    const nScreens = Math.round(arch.screens[0] + (arch.screens[1] - arch.screens[0]) * identity.scale);
+    const sign = site.side === "left" ? 1 : -1;
+    for (let k = 0; k < nScreens; k++) {
+      const sPos = site.sStart + ((site.sEnd - site.sStart) * (k + 1)) / (nScreens + 1);
+      const p = sampleAt(track, sPos);
+      // on the pit side, facing ACROSS the track toward the main stand
+      const off = 30 + rnd() * 8;
+      screens.push({
+        x: p.x + -Math.sin(p.heading) * sign * off,
+        y: p.y + Math.cos(p.heading) * sign * off,
+        z: p.z,
+        heading: p.heading + (sign > 0 ? -Math.PI / 2 : Math.PI / 2),
+        title: `${track.identity?.namingFlavor === "alpine" ? "Alpen" : "Grand"} Prix · Lap Tower`,
+      });
+    }
+  }
+
+  // ---- night lighting (phase 7) ---------------------------------------------
+  const lighting = buildLighting(track, site, pit.plan, complex.plan, gst.stands, arch, identity, controls.seed);
+
   // ---- reservation polygons (Stage A contract) -----------------------------
   const buildingDepth = arch.depth[0] + (arch.depth[1] - arch.depth[0]) * 0.5;
   const pitHalfW = pit.plan.width;
@@ -139,7 +164,8 @@ export function planFacilities(
     pitComplex: complex.plan,
     grandstands: gst.stands,
     foundations: [...foundations, ...gst.foundations],
-    lighting: { anchors: [], realLightIndices: [] },
+    lighting,
+    screens,
     reservation,
     feasible: violations.filter((v) => v.kind === "pitlane-topology").length === 0,
     violations,

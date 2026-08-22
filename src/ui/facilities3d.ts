@@ -236,6 +236,12 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: im
   if (plan.grandstands.length > 0) {
     group.add(grandstandMeshes(plan.grandstands));
   }
+  if (plan.lighting.anchors.length > 0) {
+    group.add(facilityLampMeshes(plan.lighting));
+  }
+  for (const sc of plan.screens) {
+    group.add(screenTowerMesh(track, sc.x, sc.y, sc.z, sc.heading, sc.title));
+  }
   return group;
 }
 
@@ -642,5 +648,175 @@ export function grandstandMeshes(stands: GrandstandPlan[], debug = false): Group
       g.add(arrow);
     }
   }
+  return g;
+}
+
+// ============================================================ night lighting
+
+import {
+  AdditiveBlending,
+  Points,
+  PointsMaterial,
+} from "three";
+import type { FacilityLightingPlan } from "../core/facilities/types";
+
+let lampDot: CanvasTexture | null = null;
+function lampDotTex(): CanvasTexture {
+  if (lampDot) return lampDot;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 64;
+  const ctx = cv.getContext("2d")!;
+  const g = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  g.addColorStop(0, "rgba(255,255,255,1)");
+  g.addColorStop(0.4, "rgba(255,255,255,0.5)");
+  g.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  lampDot = new CanvasTexture(cv);
+  return lampDot;
+}
+
+/** Emissive lamp anchors as one additive Points cloud (visible at night). */
+export function facilityLightPoints(lighting: FacilityLightingPlan): Points {
+  const n = lighting.anchors.length;
+  const pos = new Float32Array(n * 3);
+  const col = new Float32Array(n * 3);
+  const c = { r: 1, g: 1, b: 1 };
+  lighting.anchors.forEach((a, i) => {
+    pos[i * 3] = a.x;
+    pos[i * 3 + 1] = a.z;
+    pos[i * 3 + 2] = -a.y;
+    const hex = a.color;
+    c.r = ((hex >> 16) & 255) / 255;
+    c.g = ((hex >> 8) & 255) / 255;
+    c.b = (hex & 255) / 255;
+    const k = a.intensity;
+    col[i * 3] = c.r * k;
+    col[i * 3 + 1] = c.g * k;
+    col[i * 3 + 2] = c.b * k;
+  });
+  const geo = new BufferGeometry();
+  geo.setAttribute("position", new BufferAttribute(pos, 3));
+  geo.setAttribute("color", new BufferAttribute(col, 3));
+  const mat = new PointsMaterial({
+    size: 2.6,
+    map: lampDotTex(),
+    vertexColors: true,
+    transparent: true,
+    opacity: 0,
+    blending: AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true,
+  });
+  const pts = new Points(geo, mat);
+  pts.name = "facility-lamps";
+  pts.frustumCulled = false;
+  return pts;
+}
+
+/** Vary lamp point size by kind: bake into per-point scale via geometry attr. */
+export function facilityLampMeshes(lighting: FacilityLightingPlan): Group {
+  const g = new Group();
+  g.name = "facility-lighting";
+  g.add(facilityLightPoints(lighting));
+  return g;
+}
+
+// ============================================================ screens
+
+import { Group as THREEGroup } from "three";
+
+/** Generated screen content: timing tower + track map (no real brands). */
+export function makeScreenTexture(track: Track, title: string): CanvasTexture {
+  const cv = document.createElement("canvas");
+  cv.width = 512;
+  cv.height = 288;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#0b1016";
+  ctx.fillRect(0, 0, 512, 288);
+  // header
+  ctx.fillStyle = "#e8362a";
+  ctx.fillRect(0, 0, 512, 34);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 20px sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText(title.toUpperCase().slice(0, 26), 12, 24);
+  // timing tower rows
+  const rows = 8;
+  for (let r = 0; r < rows; r++) {
+    const y = 48 + r * 26;
+    ctx.fillStyle = r % 2 === 0 ? "#121a24" : "#0e141d";
+    ctx.fillRect(8, y - 16, 300, 24);
+    ctx.fillStyle = "#f2f4f6";
+    ctx.font = "bold 15px monospace";
+    ctx.fillText(String(r + 1).padStart(2, " "), 16, y);
+    ctx.fillStyle = ["#e8362a", "#2a5ae8", "#3ae85a", "#e8a83a", "#8a4ae8", "#3ac8e8", "#e84a98", "#9ae83a"][r];
+    ctx.fillRect(44, y - 12, 10, 16);
+    ctx.fillStyle = "#c8ccd2";
+    ctx.fillText(`CAR ${r * 7 + 3}`, 62, y);
+    ctx.fillStyle = "#8a9098";
+    ctx.fillText(`1:4${r}.$\{String(100 + ((r * 137) % 880)).padStart(3, "0")}`, 140, y);
+    if (r > 0) {
+      ctx.fillStyle = "#e8b23a";
+      ctx.fillText(`+${(r * 0.421).toFixed(3)}`, 230, y);
+    }
+  }
+  // track map
+  const samples = track.samples;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const s of samples) {
+    minX = Math.min(minX, s.x);
+    maxX = Math.max(maxX, s.x);
+    minY = Math.min(minY, s.y);
+    maxY = Math.max(maxY, s.y);
+  }
+  const mx = (x: number) => 330 + ((x - minX) / Math.max(1, maxX - minX)) * 168;
+  const my = (y: number) => 270 - ((y - minY) / Math.max(1, maxY - minY)) * 224;
+  ctx.strokeStyle = "#3a82e8";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  samples.forEach((s, i) => (i === 0 ? ctx.moveTo(mx(s.x), my(s.y)) : ctx.lineTo(mx(s.x), my(s.y))));
+  ctx.closePath();
+  ctx.stroke();
+  ctx.fillStyle = "#e8362a";
+  ctx.beginPath();
+  ctx.arc(mx(samples[0].x), my(samples[0].y), 5, 0, Math.PI * 2);
+  ctx.fill();
+  const tex = new CanvasTexture(cv);
+  tex.colorSpace = SRGBColorSpace;
+  return tex;
+}
+
+/** A supported video screen facing the grandstand/pit straight. */
+export function screenTowerMesh(track: Track, x: number, y: number, z: number, heading: number, title: string): Group {
+  const g = new THREEGroup();
+  // support columns
+  for (const sx of [-3.4, 3.4]) {
+    const col = new Mesh(new CylinderGeometry(0.28, 0.34, 9.5, 8), CONCRETE_MAT);
+    col.position.set(sx, 4.75, 0);
+    col.castShadow = true;
+    g.add(col);
+  }
+  const frame = new Mesh(new BoxGeometry(9.6, 5.6, 0.4), new MeshStandardMaterial({ color: 0x14181e, roughness: 0.6 }));
+  frame.position.y = 9.2;
+  g.add(frame);
+  const screen = new Mesh(
+    new PlaneGeometry(8.8, 4.9),
+    new MeshStandardMaterial({
+      map: makeScreenTexture(track, title),
+      emissive: 0xffffff,
+      emissiveMap: makeScreenTexture(track, title),
+      emissiveIntensity: 0.0,
+      roughness: 0.4,
+    }),
+  );
+  screen.name = "screen-emissive";
+  screen.position.set(0, 9.2, 0.25);
+  g.add(screen);
+  g.position.set(x, z, -y);
+  g.rotation.y = -heading;
   return g;
 }

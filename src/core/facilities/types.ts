@@ -378,6 +378,14 @@ export interface FacilityViolation {
 
 // ---------------------------------------------------------------- plan
 
+export interface ScreenPlan {
+  x: number;
+  y: number;
+  z: number;
+  heading: number;
+  title: string;
+}
+
 export interface FacilityPlan {
   version: number;
   seed: number;
@@ -388,6 +396,7 @@ export interface FacilityPlan {
   grandstands: GrandstandPlan[];
   foundations: FoundationPlan[];
   lighting: FacilityLightingPlan;
+  screens: ScreenPlan[];
   reservation: FacilityReservation;
   feasible: boolean;
   violations: FacilityViolation[];
