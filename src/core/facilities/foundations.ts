@@ -145,7 +145,7 @@ export function supportDepths(f: FoundationPlan, ground: GroundSurface | null): 
 export function makeFacilityCarve(
   base: GroundSurface | null,
   foundations: FoundationPlan[],
-  margin = 9,
+  margin = 16,
 ): GroundSurface | null {
   if (!base || foundations.length === 0) return base;
   const pads = foundations.map((f) => {

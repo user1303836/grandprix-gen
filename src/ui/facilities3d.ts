@@ -225,7 +225,14 @@ function pitWallGroup(plan: PitLanePlan): Group {
 }
 
 /** Build every facility mesh for the current plan. */
-export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: import("../core/facilities/types").GroundSurface | null = null): Group {
+export function buildFacilityMeshes(
+  plan: FacilityPlan,
+  track: Track,
+  ground: import("../core/facilities/types").GroundSurface | null = null,
+  /** ground WITHOUT facility pads — foundations reach THIS (else skirts
+   * sample their own pad and shrink to zero) */
+  rawGround: import("../core/facilities/types").GroundSurface | null = null,
+): Group {
   const group = new Group();
   group.name = "facilities";
   if (plan.pitLane) {
@@ -255,7 +262,7 @@ export function buildFacilityMeshes(plan: FacilityPlan, track: Track, ground: im
     group.add(pitComplexMeshes(plan.pitComplex, track, { sStart: plan.site.sStart, side: plan.site.side }));
   }
   if (plan.foundations.length > 0) {
-    group.add(foundationMeshes(plan, ground));
+    group.add(foundationMeshes(plan, rawGround ?? ground));
   }
   if (plan.grandstands.length > 0) {
     group.add(grandstandMeshes(plan.grandstands));

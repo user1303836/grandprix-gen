@@ -495,7 +495,8 @@ export class View3D {
         const rawSurf: TerrainSurface | null = state.terrain ?? (track.world ? surfaceFromPlan(track.world) : null);
         const fg = this.finalGround(track, rawSurf);
         this.facilityGround = fg ? { elevationAt: fg } : null;
-        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround));
+        const corridorOnly = rawSurf ? { elevationAt: corridorCarve(rawSurf, track, 120) } : null;
+        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround, corridorOnly));
       } else {
         this.facilityGround = null;
       }
