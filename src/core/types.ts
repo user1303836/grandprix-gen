@@ -378,6 +378,9 @@ export interface Track {
   carveInner: Float32Array | null;
   /** The civil plan (structure spans + analysis). Terrain mode only. */
   civil: import("./civil").CivilPlan | null;
+  /** Procedural facility plan (pit complex, stands…). Planned in the main
+   * thread from an independent facility seed; null until planned. */
+  facilities?: import("./facilities/types").FacilityPlan | null;
   /** Sector-scale character zones (old/modern/mountain/... kilometer axis). */
   zones: import("./character").CircuitZone[];
 }

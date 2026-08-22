@@ -30,6 +30,7 @@ import { makeWaterMaterial } from "./water";
 import { makeGrassTexture } from "./textures";
 import type { WorldPlan, Landmark, Biome } from "../core/world/types";
 import type { Track } from "../core/types";
+import { pointInPolygon } from "../core/facilities/foundations";
 import { windUniform } from "./furniture";
 
 export interface WorldMeshOptions {
@@ -483,11 +484,18 @@ function swayify(mat: MeshStandardMaterial): void {
   };
 }
 
-function buildVegetation(plan: WorldPlan, season: "summer" | "autumn"): Group {
+function buildVegetation(plan: WorldPlan, season: "summer" | "autumn", track?: Track): Group {
   const group = new Group();
   group.name = "world-vegetation";
   const autumn = season === "autumn";
-  const veg = plan.vegetation;
+  // Stage-A contract: the facility reservation excludes vegetation
+  const exclusion = track?.facilities?.reservation?.vegetationExclusionPolygons ?? [];
+  const veg = exclusion.length > 0
+    ? {
+        ...plan.vegetation,
+        trees: plan.vegetation.trees.filter((t) => !exclusion.some((poly) => pointInPolygon({ x: t.x, y: t.y }, poly))),
+      }
+    : plan.vegetation;
 
   if (veg.trees.length > 0) {
     const conifers = veg.trees.filter((t) => t.conifer);
@@ -742,7 +750,7 @@ export function buildWorldMeshes(plan: WorldPlan, track: Track, opts: WorldMeshO
   const apron = buildFarApron(plan, opts);
   if (apron) group.add(apron);
   group.add(buildWaterMeshes(plan, opts));
-  group.add(buildVegetation(plan, opts.season));
+  group.add(buildVegetation(plan, opts.season, track));
   group.add(buildLandmarks(plan, opts));
   void track;
   return group;

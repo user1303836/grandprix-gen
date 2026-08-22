@@ -16,6 +16,7 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { buildBarrierMeshes, buildGridMesh, buildTrackMesh } from "./mesh";
 import { carveSampler, type TerrainSurface } from "../core/terrain";
 import { buildStructureMeshes, buildFeatureMeshes } from "./structuresMesh";
+import { buildFacilityMeshParts } from "./facilityMesh";
 import type { Track } from "../core/types";
 
 const KERB_COLORS: Record<string, number> = {
@@ -119,8 +120,12 @@ export async function trackToGlb(
       bridge: 0x9a968c, piers: 0x8f8b81, tunnel: 0x43444a, portals: 0x95897a,
       retaining: 0x8f8b80, rock: 0x6b6357, embankment: 0x465c34,
       "pit-lane": 0x484b52, "pit-wall": 0xc8c4bc, "service-road": 0x5c5c58,
+      pit_lane: 0x3a3d43, pit_wall: 0xc8c4bc, garage_building: 0xcfd3d8,
+      garage_doors: 0x9a4a3a, hospitality: 0xb8c4d0, race_control: 0xb6b2a8,
+      grandstand_main: 0xb8bcc2, grandstand_secondary: 0xaaaeb6,
+      facility_foundations: 0xa8a49a, screens: 0x1a2028,
     };
-    for (const part of [...buildStructureMeshes(track, groundSampler), ...buildFeatureMeshes(track)]) {
+    for (const part of [...buildStructureMeshes(track, groundSampler), ...buildFeatureMeshes(track), ...buildFacilityMeshParts(track)]) {
       const geo = new BufferGeometry();
       const pos = new Float32Array(part.positions.length);
       for (let i = 0; i < part.positions.length; i += 3) {

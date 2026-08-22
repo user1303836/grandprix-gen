@@ -334,6 +334,62 @@ export class App {
     );
     this.store.pushHistory(label);
     this.dirty2d = true;
+    this.planFacilitiesForCurrentTrack();
+  }
+
+  /** Plan/re-plan the facility complex for the current track (facility seed
+   * is independent — this never touches the track itself). */
+  planFacilitiesForCurrentTrack(): void {
+    const s = this.store.state;
+    if (!s.track) return;
+    void (async () => {
+      try {
+        const { planFacilities } = await import("../core/facilities/plan");
+        const { carveSampler } = await import("../core/terrain");
+        const { surfaceFromPlan } = await import("../core/world/synthesis");
+        const ground = s.terrain
+          ? {
+              elevationAt: (x: number, y: number) =>
+                carveSampler(s.terrain!, s.track!.samples, s.track!.carveMask, 40, 120, s.track!.carveInner)(x, y),
+              slopeAt: (x: number, y: number) => s.terrain!.slopeAt(x, y),
+            }
+          : s.track!.world
+            ? (() => {
+                const ws = surfaceFromPlan(s.track!.world!);
+                return {
+                  elevationAt: (x: number, y: number) => ws.elevationAt(x, y),
+                  slopeAt: (x: number, y: number) => ws.slopeAt(x, y),
+                };
+              })()
+            : null;
+        const plan = planFacilities(s.track!, ground, s.facility);
+        const track = { ...s.track!, facilities: plan };
+        this.store.set({ track }, "track");
+        this.view3d.setState(this.store.state);
+        this.dirty2d = true;
+        if (!plan.feasible) {
+          console.warn("[facilities] infeasible:", plan.violations[0]?.detail);
+        }
+      } catch (err) {
+        console.warn("[facilities] planning failed", err);
+      }
+    })();
+  }
+
+  onFacilityParam(key: string, value: number | string): void {
+    const f = this.store.state.facility;
+    const next = { ...f, [key]: key === "seed" ? Number(value) >>> 0 : key === "style" ? value : Number(value) };
+    this.store.set({ facility: next }, "facility");
+    this.planFacilitiesForCurrentTrack();
+  }
+
+  regenerateFacilities(newSeed?: number): void {
+    const f = this.store.state.facility;
+    this.store.set(
+      { facility: { ...f, seed: newSeed ?? ((Math.random() * 0xffffffff) >>> 0) } },
+      "facility",
+    );
+    this.planFacilitiesForCurrentTrack();
   }
 
   async generate(): Promise<void> {
@@ -919,6 +975,8 @@ export class App {
     const elSidebar = buildSidebar(s, {
       onMorphParam: (k, v) => this.onMorphParam(k, v),
       onStructuralParam: (k, v) => this.onStructuralParam(k, v),
+      onFacilityParam: (k, v) => this.onFacilityParam(k, v),
+      onRegenerateFacilities: () => this.regenerateFacilities(),
       onVehicle: (id) => this.onVehicle(id),
       onDisplay: (patch) => this.store.set(patch, ...Object.keys(patch)),
       onUndo: () => this.undo(),

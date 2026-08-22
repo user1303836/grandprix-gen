@@ -4,6 +4,7 @@
  */
 
 import type { AppState, HeatLayer } from "./state";
+import { sampleAt } from "../core/types";
 import type { Track, TrackSample } from "../core/types";
 import type { TerrainGrid } from "../core/terrain";
 import { surfaceFromPlan } from "../core/world/synthesis";
@@ -396,6 +397,7 @@ export class View2D {
     this.drawZoneTints(track);
     this.drawFeatureUnderlays(track);
     if (state.debugCivil) this.drawCivilOverlay(track);
+    if (state.debugFacilities) this.drawFacilitiesOverlay(state);
     this.drawTrack(state, track);
     if (state.lockRange) this.drawLockRange(track, state.lockRange);
     if (state.showCorners) this.drawCornerNumbers(track);
@@ -995,6 +997,111 @@ export class View2D {
   }
 
   /** Civil debug: color the band by structure kind, violations in red. */
+  private drawFacilitiesOverlay(state: AppState): void {
+    const plan = state.track?.facilities;
+    if (!plan) return;
+    const ctx = this.ctx;
+    ctx.save();
+    for (const r of plan.site.rejected.slice(0, 12)) {
+      ctx.strokeStyle = "rgba(226, 80, 60, 0.55)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      for (let sPos = r.sStart; sPos <= Math.min(r.sEnd, r.sStart + 300); sPos += 20) {
+        const p = sampleAt(state.track!, sPos % state.track!.length);
+        const x = this.wx(p.x);
+        const y = this.wy(p.y);
+        if (sPos === r.sStart) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(80, 200, 120, 0.9)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let sPos = plan.site.sStart; sPos <= plan.site.sEnd; sPos += 12) {
+      const p = sampleAt(state.track!, sPos);
+      const x = this.wx(p.x);
+      const y = this.wy(p.y);
+      if (sPos === plan.site.sStart) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    for (const f of plan.foundations) {
+      ctx.fillStyle = "rgba(90, 140, 220, 0.16)";
+      ctx.strokeStyle = "rgba(90, 140, 220, 0.8)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      f.footprint.forEach((p, i) => (i === 0 ? ctx.moveTo(this.wx(p.x), this.wy(p.y)) : ctx.lineTo(this.wx(p.x), this.wy(p.y))));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      const cx = f.footprint.reduce((a, p) => a + p.x, 0) / f.footprint.length;
+      const cy = f.footprint.reduce((a, p) => a + p.y, 0) / f.footprint.length;
+      ctx.fillStyle = "rgba(200, 220, 255, 0.9)";
+      ctx.font = "9px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(`${f.kind} z=${f.datumZ[0].toFixed(1)} (g ${f.ground.min.toFixed(1)}..${f.ground.max.toFixed(1)})`, this.wx(cx), this.wy(cy));
+    }
+    if (plan.pitLane) {
+      ctx.strokeStyle = "rgba(240, 220, 90, 0.95)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      plan.pitLane.centerline.forEach((c, i) => (i === 0 ? ctx.moveTo(this.wx(c.x), this.wy(c.y)) : ctx.lineTo(this.wx(c.x), this.wy(c.y))));
+      ctx.stroke();
+      const mark = (sV: number, color: string, label: string) => {
+        const c = plan.pitLane!.centerline[Math.min(plan.pitLane!.centerline.length - 1, Math.round(sV / 4))];
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(this.wx(c.x), this.wy(c.y), 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.font = "9px monospace";
+        ctx.fillText(label, this.wx(c.x) + 7, this.wy(c.y) - 5);
+      };
+      mark(plan.pitLane.speedLimitS, "#e8b23a", "speed limit");
+      mark(plan.pitLane.releaseS, "#3ae85a", "release");
+    }
+    for (const st of plan.grandstands) {
+      const ox = this.wx(st.origin.x);
+      const oy = this.wy(st.origin.y);
+      const fx = this.wx(st.origin.x + st.frontDir.x * 30);
+      const fy = this.wy(st.origin.y + st.frontDir.y * 30);
+      ctx.strokeStyle = "rgba(255, 80, 80, 0.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.lineTo(fx, fy);
+      ctx.stroke();
+      const ang = Math.atan2(fy - oy, fx - ox);
+      ctx.beginPath();
+      ctx.moveTo(fx, fy);
+      ctx.lineTo(fx - 8 * Math.cos(ang - 0.4), fy - 8 * Math.sin(ang - 0.4));
+      ctx.lineTo(fx - 8 * Math.cos(ang + 0.4), fy - 8 * Math.sin(ang + 0.4));
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255, 80, 80, 0.9)";
+      ctx.fill();
+      for (const ts of [st.targetTrackRange.sStart, st.targetTrackRange.sEnd]) {
+        const tp = sampleAt(state.track!, ts % state.track!.length);
+        ctx.strokeStyle = "rgba(255, 160, 80, 0.35)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(this.wx(tp.x), this.wy(tp.y));
+        ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(255, 200, 200, 0.95)";
+      ctx.font = "9.5px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`${st.id} · ${st.kind} · view ${st.viewScore.toFixed(2)} · ~${st.capacityEstimate}`, ox + 6, oy - 6);
+    }
+    for (const sc of plan.screens) {
+      ctx.fillStyle = "rgba(80, 180, 255, 0.9)";
+      ctx.fillRect(this.wx(sc.x) - 4, this.wy(sc.y) - 4, 8, 8);
+    }
+    ctx.restore();
+  }
+
   private drawCivilOverlay(track: Track): void {
     const civ = track.civil;
     if (!civ) return;

@@ -802,6 +802,7 @@ export function buildFeatureMeshes(track: Track): StructureMeshPart[] {
   };
 
   for (const f of feats) {
+    if (f.kind === "pit-lane" && track.facilities?.pitLane) continue; // canonical facility plan owns the pit lane now
     if (f.kind === "pit-lane") {
       const i0 = Math.round(f.sStart / ds);
       const i1 = Math.round(f.sEnd / ds);

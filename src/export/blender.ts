@@ -11,6 +11,7 @@ import type { TerrainSurface } from "../core/terrain";
 import { worldExportParts } from "../core/world/exportGeometry";
 import { buildBarrierMeshes, buildTrackMesh } from "./mesh";
 import type { Track } from "../core/types";
+import { buildFacilityMeshParts } from "./facilityMesh";
 
 export interface BlenderOptions {
   terrain?: TerrainSurface | null;
@@ -121,6 +122,22 @@ export function trackToBlenderScript(track: Track, opts: BlenderOptions = {}): s
     });
   }
 
+  // facility volumes (pit building, stands, screens) as semantic boxes
+  const facilityParts: { name: string; boxes: number[][] }[] = [];
+  if (track.facilities) {
+    for (const part of buildFacilityMeshParts(track)) {
+      // pack triangles raw; the blender script builds them as mesh chunks
+      const tris: number[][] = [];
+      for (let i = 0; i < part.indices.length; i += 3) {
+        for (let k = 0; k < 3; k++) {
+          const vi = part.indices[i + k] * 3;
+          tris.push([round(part.positions[vi]), round(part.positions[vi + 1]), round(part.positions[vi + 2])]);
+        }
+      }
+      facilityParts.push({ name: part.name, boxes: tris });
+    }
+  }
+
   // world environment parts (water/boundary/vegetation/landmarks)
   let worldJson = "null";
   if (opts.world) {
@@ -140,6 +157,7 @@ export function trackToBlenderScript(track: Track, opts: BlenderOptions = {}): s
     center,
     corners,
     features,
+    facilityParts,
     meta: {
       seed: track.seed,
       length: track.length,
@@ -192,11 +210,17 @@ def mat_for(part_name):
         return MAT["line"]
     if part_name.startswith("barrier"):
         return MAT["barrier"]
+    if part_name.startswith("garage_doors"):
+        return MAT.get("facility_door", MAT["asphalt_modern"])
+    if part_name.startswith(("garage", "pit_", "grandstand", "hospitality", "race_control", "screens", "facility")):
+        return MAT.get("facility", MAT["asphalt_modern"])
     return MAT["asphalt_modern"]
 
 MAT["line"] = make_mat("line", (0.95, 0.95, 0.95), 0.7)
 MAT["barrier"] = make_mat("barrier", (0.47, 0.50, 0.48), 0.55)
 MAT["terrain"] = make_mat("terrain", (0.18, 0.29, 0.13), 1.0)
+MAT["facility"] = make_mat("facility", (0.78, 0.80, 0.82), 0.8)
+MAT["facility_door"] = make_mat("facility_door", (0.55, 0.25, 0.20), 0.6)
 MAT["marker"] = make_mat("marker", (0.95, 0.80, 0.20), 0.4)
 
 # ------------------------------------------------------------------- meshes
@@ -207,6 +231,18 @@ for part in DATA["parts"]:
     ob = bpy.data.objects.new(part["name"], me)
     bpy.context.collection.objects.link(ob)
     ob.data.materials.append(mat_for(part["name"]))
+
+# ------------------------------------------------------------- facilities
+for fp in DATA.get("facilityParts", []):
+    tris = fp["boxes"]
+    verts = tris
+    faces = [list(range(i, i + 3)) for i in range(0, len(tris), 3)]
+    me = bpy.data.meshes.new(fp["name"])
+    me.from_pydata(verts, [], faces)
+    me.update()
+    ob = bpy.data.objects.new(fp["name"], me)
+    bpy.context.collection.objects.link(ob)
+    ob.data.materials.append(mat_for(fp["name"]))
 
 # --------------------------------------------------------- centerline curve
 cu = bpy.data.curves.new("Circuit_Centerline", "CURVE"); cu.dimensions = "3D"

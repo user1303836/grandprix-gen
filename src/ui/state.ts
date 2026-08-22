@@ -49,6 +49,8 @@ export interface AppState {
   imageryContext: import("./imagery").ImageryDrape | null;
   /** show satellite drape on the 3D terrain (when available) */
   showSatellite: boolean;
+  /** independent facility generation controls (facility seed ≠ track seed) */
+  facility: import("../core/facilities/types").FacilityControls;
   /** OSM building footprints in local metric coords. */
   buildings: OsmBuilding[] | null;
   /** building avoidance strength during terrain generation */
@@ -63,6 +65,7 @@ export interface AppState {
   showTerrainHeat: boolean;
   /** Civil debug overlay: structure-kind coloring + violations. */
   debugCivil: boolean;
+  debugFacilities: boolean;
   selectedS: number | null;
   /** Locked section (stations kept when regenerating the rest). */
   lockRange: { sStart: number; sEnd: number } | null;
@@ -97,6 +100,15 @@ export class Store {
       imagery: null,
       imageryContext: null,
       showSatellite: true,
+      facility: {
+        seed: (Math.random() * 0xffffffff) >>> 0,
+        style: "auto",
+        scale: 0.5,
+        variation: 0.35,
+        grandstandDensity: 0.5,
+        crowdDensity: 0.7,
+        nightReadiness: 0.5,
+      },
       buildings: null,
       avoidBuildings: "soft",
       site: null,
@@ -108,6 +120,7 @@ export class Store {
       showControlPoints: false,
       showTerrainHeat: true,
       debugCivil: false,
+      debugFacilities: false,
       selectedS: null,
       lockRange: null,
       envSeed: (Math.random() * 0xffffffff) >>> 0,

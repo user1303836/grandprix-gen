@@ -43,6 +43,8 @@ import {
   PlaneGeometry,
   CircleGeometry,
   Quaternion,
+  Points,
+  PointsMaterial,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
@@ -54,6 +56,7 @@ import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { SkyDome, type SkyStyle } from "./sky";
 import { makeAsphaltTexture, makeConcreteTexture, makeGrassTexture, makeGravelTexture, makeMownGrassTexture } from "./textures";
 import { buildFurniture, windUniform } from "./furniture";
+import { buildFacilityMeshes } from "./facilities3d";
 import { CloudShadows, makeWaterMaterial } from "./water";
 import { DriveHUD } from "./driveHud";
 import { RainSystem } from "./rain";
@@ -85,6 +88,8 @@ import {
   RunoffNames as RUNOFF_NAMES,
 } from "../core/character";
 import { sampleAt } from "../core/types";
+import { carBasisWorld, planToWorld, roadFrameAt } from "../core/roadFrame";
+import { makeFacilityCarve } from "../core/facilities/foundations";
 import { carveSampler, makeTrackProximity, type TerrainSurface } from "../core/terrain";
 import { buildWorldMeshes } from "./worldMeshes";
 import { surfaceFromPlan } from "../core/world/synthesis";
@@ -470,6 +475,23 @@ export class View3D {
       this.addFeatureMeshes(track);
       this.addFeatureLabels(track);
       this.trackGroup.add(buildFurniture(track));
+      if (track.facilities) {
+        const baseGround: import("../core/facilities/types").GroundSurface | null = state.terrain
+          ? {
+              elevationAt: (x: number, y: number) => carveSampler(state.terrain!, track.samples, track.carveMask, 40, 120, track.carveInner)(x, y),
+              slopeAt: (x: number, y: number) => state.terrain!.slopeAt(x, y),
+            }
+          : track.world
+            ? (() => {
+                const ws = surfaceFromPlan(track.world);
+                return { elevationAt: (x: number, y: number) => ws.elevationAt(x, y), slopeAt: (x: number, y: number) => ws.slopeAt(x, y) };
+              })()
+            : null;
+        this.facilityGround = makeFacilityCarve(baseGround, track.facilities.foundations);
+        this.trackGroup.add(buildFacilityMeshes(track.facilities, track, this.facilityGround));
+      } else {
+        this.facilityGround = null;
+      }
       this.addPuddles(track);
       this.maybeFitCamera(track, state.terrain);
       this.rebuildFloodlights();
@@ -478,7 +500,11 @@ export class View3D {
     if (state.terrain && track) {
       // detailed carved site terrain
       const g = state.terrain;
-      const carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+      let carve = carveSampler(g, track.samples, track.carveMask, 40, 120, track.carveInner);
+      if (track.facilities && track.facilities.foundations.length > 0) {
+        const fc = makeFacilityCarve({ elevationAt: carve }, track.facilities.foundations);
+        if (fc) carve = fc.elevationAt as typeof carve;
+      }
       // cell size well under the narrowest carved bench (~13 m in cuts)
       const span = Math.max(g.width, g.height) * g.resolution;
       const maxSide = Math.max(240, Math.min(720, Math.ceil(span / 9.5)));
@@ -776,6 +802,35 @@ export class View3D {
       this.sky.setStyle(SKY_STYLES[this.dayTime]);
     }
     this.sky.setSunDirection(this.sunDirection());
+    // facility lamps + screen emissives follow the night
+    const nightK = this.dayTime === "night" ? 1 : this.dayTime === "dusk" ? 0.6 : this.dayTime === "golden" ? 0.18 : 0;
+    this.scene.traverse((o) => {
+      if (o.name === "facility-lamps" && o instanceof Points) {
+        (o.material as PointsMaterial).opacity = nightK * 0.95;
+      }
+      if (o.name === "screen-emissive" && o instanceof Mesh) {
+        (o.material as MeshStandardMaterial).emissiveIntensity = 0.25 + nightK * 1.6;
+      }
+    });
+    // facility real-light pool
+    if (this.state?.track?.facilities) {
+      const plan = this.state.track.facilities;
+      while (this.facilityLights.length < Math.min(4, plan.lighting.realLightIndices.length)) {
+        const l = new PointLight(0xffe8c8, 0, 90, 1.8);
+        this.scene.add(l);
+        this.facilityLights.push(l);
+      }
+      this.facilityLights.forEach((l, i) => {
+        const ai = plan.lighting.realLightIndices[i];
+        const a = ai !== undefined ? plan.lighting.anchors[ai] : null;
+        if (!a) {
+          l.intensity = 0;
+          return;
+        }
+        l.position.set(a.x, a.z, -a.y);
+        l.intensity = nightK * 130 * a.intensity;
+      });
+    }
     // lights
     this.sun.color.setHex(this.weather === "rain" ? 0xaebdd2 : p.sunColor);
     this.sun.intensity = this.weather === "rain" ? p.sunIntensity * 0.55 : p.sunIntensity;
@@ -1085,6 +1140,27 @@ export class View3D {
       this.scene.add(l);
       this.floodLights.push({ light: l, idx: -1 });
     }
+  }
+
+  private facilityGround: import("../core/facilities/types").GroundSurface | null = null;
+  private facilityLights: PointLight[] = [];
+  private readonly basisM4 = new Matrix4();
+  private readonly basisQ = new Quaternion();
+  /** Orient a car from the shared 3D road frame (no Euler guessing). */
+  private orientCar(group: Group, track: Track, sPos: number, dt: number): void {
+    const frame = roadFrameAt(track, sPos);
+    const b = carBasisWorld(frame);
+    this.basisM4.makeBasis(
+      new Vector3(b.x.x, b.x.y, b.x.z),
+      new Vector3(b.y.x, b.y.y, b.y.z),
+      new Vector3(b.z.x, b.z.y, b.z.z),
+    );
+    this.basisQ.setFromRotationMatrix(this.basisM4);
+    const k = 1 - Math.exp(-dt * 16); // fast smoothing, no visible lag
+    group.quaternion.slerp(this.basisQ, k);
+    const pW = planToWorld(frame.position);
+    const nW = planToWorld(frame.normal);
+    group.position.set(pW.x + nW.x * 0.02, pW.y + nW.y * 0.02, pW.z + nW.z * 0.02);
   }
 
   /** Keep the live light pool on the poles nearest the camera. */
@@ -1985,14 +2061,20 @@ export class View3D {
           } else {
             c.s = (c.s + vNow * c.factor * dt) % track.length;
           }
-          const cp = sampleAt(track, c.s);
-          c.group.position.set(cp.x, cp.z + 0.02, -cp.y);
-          c.group.rotation.set(0, -cp.heading, 0);
-          c.group.rotation.z = -cp.bank * 0.85;
+          this.orientCar(c.group, track, c.s, dt);
           c.group.visible = ci === 0 ? this.driveChase : true;
-          // spray behind each car when wet
+          // spray behind each car when wet (along the 3D tangent)
           if (this.wetFactor > 0.3 && vNow > 22) {
-            this.spray.emit(cp.x, cp.z + 0.4, -cp.y, -Math.cos(cp.heading) * vNow * 0.25, Math.sin(cp.heading) * vNow * 0.25);
+            const f = roadFrameAt(track, c.s);
+            const tW = planToWorld(f.tangent);
+            const pW = planToWorld(f.position);
+            this.spray.emit(
+              pW.x - tW.x * 2.2,
+              pW.y + 0.4,
+              pW.z - tW.z * 2.2,
+              -tW.x * vNow * 0.25,
+              -tW.z * vNow * 0.25,
+            );
           }
         });
       }
@@ -2029,15 +2111,20 @@ export class View3D {
         }
         if (target) this.camera.lookAt(target.x, target.y + 0.8, target.z);
       } else if (this.driveChase) {
-        const backS = (this.driveS - 19 + track.length) % track.length;
-        const back = sampleAt(track, backS);
-        this.camera.position.set(back.x, back.z + 7.6, -back.y);
+        const fHere = roadFrameAt(track, this.driveS);
+        const tW = planToWorld(fHere.tangent);
+        const nW = planToWorld(fHere.normal);
+        const pW = planToWorld(fHere.position);
+        this.camera.up.set(nW.x, nW.y, nW.z);
+        this.camera.position.set(pW.x - tW.x * 15 + nW.x * 7.6, pW.y - tW.y * 15 + nW.y * 7.6, pW.z - tW.z * 15 + nW.z * 7.6);
         this.camera.lookAt(ahead.x, ahead.z + 1.6, -ahead.y);
       } else {
-        this.camera.position.set(here.x, here.z + h, -here.y);
+        const fHere = roadFrameAt(track, this.driveS);
+        const nW = planToWorld(fHere.normal);
+        this.camera.up.set(nW.x, nW.y, nW.z);
+        this.camera.position.set(here.x + nW.x * h * 0.1, here.z + h, -here.y + nW.z * h * 0.1);
         this.camera.lookAt(ahead.x, ahead.z + h * 0.6, -ahead.y);
       }
-      this.camera.rotateZ(this.driveChase ? 0 : -here.bank * 0.5);
       // FOV kick + roughness shake at speed
       const kmh = v * 3.6;
       const targetFov = this.baseFov + Math.min(11, Math.max(0, (kmh - 120) * 0.055));
@@ -2055,7 +2142,11 @@ export class View3D {
       this.hud.update(state, this.driveS, v, dt);
       if (this.headlight) {
         this.headlight.intensity = SKY_PRESETS[this.dayTime].floodlights ? 260 : 120;
-        this.headlight.position.set(here.x, here.z + 4, -here.y);
+        const fH = roadFrameAt(track, this.driveS);
+        const tW = planToWorld(fH.tangent);
+        const nW = planToWorld(fH.normal);
+        const pW = planToWorld(fH.position);
+        this.headlight.position.set(pW.x + tW.x * 8 + nW.x * 3.5, pW.y + tW.y * 8 + nW.y * 3.5, pW.z + tW.z * 8 + nW.z * 3.5);
       }
       this.updateFloodlights();
     } else {
@@ -2072,13 +2163,13 @@ export class View3D {
         this.orbitCarS = ((this.orbitCarS ?? 0) + dt * 52) % state.track.length;
         this.cars.forEach((c, ci) => {
           const cs = ci === 0 ? this.orbitCarS : (this.orbitCarS * c.factor + ci * state.track!.length * 0.31) % state.track!.length;
-          const cp = sampleAt(state.track!, cs);
-          c.group.position.set(cp.x, cp.z + 0.02, -cp.y);
-          c.group.rotation.set(0, -cp.heading, 0);
-          c.group.rotation.z = -cp.bank * 0.85;
+          this.orientCar(c.group, state.track!, cs, dt);
           c.group.visible = true;
           if (this.wetFactor > 0.3) {
-            this.spray.emit(cp.x, cp.z + 0.4, -cp.y, -Math.cos(cp.heading) * 12, Math.sin(cp.heading) * 12);
+            const f = roadFrameAt(state.track!, cs);
+            const tW = planToWorld(f.tangent);
+            const pW = planToWorld(f.position);
+            this.spray.emit(pW.x - tW.x * 2.2, pW.y + 0.4, pW.z - tW.z * 2.2, -tW.x * 12, -tW.z * 12);
           }
         });
       }
@@ -2086,6 +2177,7 @@ export class View3D {
         this.camera.fov += (this.baseFov - this.camera.fov) * Math.min(1, dt * 6);
         this.camera.updateProjectionMatrix();
       }
+      this.camera.up.set(0, 1, 0);
       this.controls.enabled = true;
       this.controls.update();
       this.updateLabels(dt);

@@ -11,6 +11,8 @@ import type { AppState } from "./state";
 export interface SidebarCallbacks {
   onMorphParam: (key: keyof TrackParams, value: number) => void;
   onStructuralParam: (key: keyof TrackParams, value: number | string) => void;
+  onFacilityParam: (key: string, value: number | string) => void;
+  onRegenerateFacilities: () => void;
   onVehicle: (id: string) => void;
   onDisplay: (patch: Partial<AppState>) => void;
   onUndo: () => void;
@@ -159,6 +161,49 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
       body.push(info);
     }
     wrap.append(section("Engineering", body, true));
+  }
+
+  // ---------------------------------------------------------- facilities
+  {
+    const f = state.facility;
+    const body: HTMLElement[] = [];
+    const mkSelect = (label: string, options: string[], current: string, onChange: (v: string) => void) => {
+      const row = el("div", { className: "ctl" });
+      row.append(el("label", { textContent: label }));
+      const sel = el("select");
+      for (const o of options) {
+        const opt = el("option", { value: o, textContent: o });
+        if (o === current) opt.selected = true;
+        sel.append(opt);
+      }
+      sel.addEventListener("change", () => onChange(sel.value));
+      row.append(sel);
+      return row;
+    };
+    body.push(mkSelect("style", ["auto", "historic-low-rise", "utilitarian", "modern-linear", "monumental", "desert-canopy", "temporary-modular", "private-club", "experimental"], f.style, (v) => cb.onFacilityParam("style", v)));
+    body.push(sliderRow("scale", { min: 0, max: 1, step: 0.05, value: f.scale, badge: undefined, format: P, onInput: () => {}, onCommit: (v) => cb.onFacilityParam("scale", v) }));
+    body.push(sliderRow("architecture variation", { min: 0, max: 1, step: 0.05, value: f.variation, badge: undefined, format: P, onInput: () => {}, onCommit: (v) => cb.onFacilityParam("variation", v) }));
+    body.push(sliderRow("grandstand density", { min: 0, max: 1, step: 0.05, value: f.grandstandDensity, badge: undefined, format: P, onInput: () => {}, onCommit: (v) => cb.onFacilityParam("grandstandDensity", v) }));
+    body.push(sliderRow("crowd density", { min: 0, max: 1, step: 0.05, value: f.crowdDensity, badge: undefined, format: P, onInput: () => {}, onCommit: (v) => cb.onFacilityParam("crowdDensity", v) }));
+    body.push(sliderRow("night readiness", { min: 0, max: 1, step: 0.05, value: f.nightReadiness, badge: undefined, format: P, onInput: () => {}, onCommit: (v) => cb.onFacilityParam("nightReadiness", v) }));
+    const seedRow = el("div", { className: "ctl" });
+    seedRow.append(el("label", { textContent: "facility seed" }));
+    const seedInput = el("input", { value: String(f.seed), style: "width:110px" }) as HTMLInputElement;
+    seedInput.addEventListener("change", () => cb.onFacilityParam("seed", Number(seedInput.value) >>> 0));
+    seedRow.append(seedInput);
+    body.push(seedRow);
+    const regen = el("button", { className: "mini-btn", textContent: "Regenerate Facilities" });
+    regen.addEventListener("click", () => cb.onRegenerateFacilities());
+    body.push(regen);
+    const plan = state.track?.facilities;
+    if (plan) {
+      const info = el("div", { className: "hint" });
+      info.textContent = `${plan.identity.architectureStyle} · ${plan.feasible ? "feasible" : "INFEASIBLE"} · site ${(plan.site.score * 100).toFixed(0)}% ${plan.site.side} @ ${(plan.site.sStart / 1000).toFixed(1)}k`;
+      if (!plan.feasible) info.style.color = "#e06848";
+      info.title = plan.violations.map((v) => `${v.kind}: ${v.detail}`).join("\n") || "no violations";
+      body.push(info);
+    }
+    wrap.append(section("Facilities", body, true));
   }
 
   // ---------------------------------------------------------- environment
@@ -336,6 +381,7 @@ export function buildSidebar(state: AppState, cb: SidebarCallbacks): HTMLElement
     ["showControlPoints", "Debug DNA", state.showControlPoints],
     ["showTerrainHeat", "Terrain", state.showTerrainHeat],
     ["debugCivil", "Civil", state.debugCivil],
+    ["debugFacilities", "Facilities", state.debugFacilities],
     ["showSatellite", "Satellite", state.showSatellite],
   ];
   for (const [key, name, val] of toggles) {
